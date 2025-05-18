@@ -110,4 +110,3 @@ def create_master_flat_from_data(flat_images_stack, master_bias_data, master_dar
     except Exception as e:
         logger_calib.error(f"Error normalizing Master Flat: {e}", exc_info=True)
         raise RuntimeError(f"Master Flat 정규화 중 오류: {str(e)[:100]}")
-

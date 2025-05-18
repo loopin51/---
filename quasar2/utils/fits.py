@@ -6,10 +6,26 @@ import os
 import numpy as np
 from astropy.io import fits
 from astropy.visualization import ZScaleInterval, ImageNormalize, AsinhStretch, LogStretch, LinearStretch
-from PIL import Image
+from PIL import Image, ImageDraw 
 import logging
 
 logger_fits = logging.getLogger(__name__) 
+
+def get_fits_keyword(header, keys, default_value=None, data_type=str):
+    """ FITS 헤더에서 여러 가능한 키워드 중 하나를 찾아 값을 반환합니다. """
+    if header is None:
+        return default_value
+    for key in keys:
+        value = header.get(key)
+        if value is not None:
+            try:
+                if data_type is float: return float(value)
+                if data_type is int: return int(value)
+                return str(value).strip() # 기본적으로 문자열로 반환하고 공백 제거
+            except ValueError:
+                logger_fits.warning(f"키워드 '{key}'의 값 '{value}'을(를) {data_type}으로 변환 불가. 다음 키워드 시도.")
+                continue
+    return default_value
 
 def load_fits_from_gradio_files(file_objects, object_type="프레임"):
     logger_fits.debug(f"Attempting to load {len(file_objects) if file_objects else 0} FITS files for {object_type}.")
@@ -17,44 +33,46 @@ def load_fits_from_gradio_files(file_objects, object_type="프레임"):
         logger_fits.warning(f"No file objects provided to load_fits_from_gradio_files for {object_type}.")
         return None, None, [] 
     all_images_list = []
-    first_header = None
+    first_valid_header = None # 첫 번째 '유효한' 헤더를 저장
     all_headers = [] 
     loaded_file_count = 0
 
     for i, file_obj in enumerate(file_objects):
+        current_header_for_list = None # 현재 파일의 헤더 (오류 시 None)
         if file_obj is None or not hasattr(file_obj, 'name') or file_obj.name is None:
             logger_fits.warning(f"File object at index {i} for {object_type} is invalid or has no name.")
-            all_headers.append(None) 
+            all_headers.append(current_header_for_list)
             continue
         file_path = file_obj.name
         logger_fits.info(f"Loading FITS file for {object_type}: {file_path}")
         try:
             with fits.open(file_path) as hdul:
                 data_hdu = None
-                current_header = None
+                header_from_hdu = None
                 if hdul[0].data is not None and hdul[0].data.size > 0 :
                      data_hdu = hdul[0]
-                     current_header = hdul[0].header.copy()
+                     header_from_hdu = hdul[0].header.copy()
                 else: 
                     for hdu_ext_idx, hdu_ext in enumerate(hdul[1:], start=1):
                         if isinstance(hdu_ext, (fits.ImageHDU, fits.CompImageHDU)) and hdu_ext.data is not None and hdu_ext.data.size > 0:
                             data_hdu = hdu_ext
-                            current_header = hdu_ext.header.copy()
+                            header_from_hdu = hdu_ext.header.copy()
                             logger_fits.debug(f"Data found in HDU extension {hdu_ext_idx} for {object_type}")
                             break
                 
                 if data_hdu is None:
                     logger_fits.warning(f"No valid image data found in FITS file for {object_type}: {file_path}")
-                    all_headers.append(None)
+                    all_headers.append(None) # 유효 데이터 없으면 헤더도 None
                     continue
 
                 data = data_hdu.data.astype(np.float32)
-                all_headers.append(current_header) 
+                current_header_for_list = header_from_hdu # 유효한 헤더
+                all_headers.append(current_header_for_list)
 
-                if first_header is None:
-                    first_header = current_header 
+                if first_valid_header is None and current_header_for_list is not None:
+                    first_valid_header = current_header_for_list
                 
-                if all_images_list and data.shape != all_images_list[0].shape:
+                if all_images_list and data.shape != all_images_list[0].shape: # 첫 번째 유효 이미지와 크기 비교
                     err_msg = f"{object_type}들 간 이미지 크기 불일치. 예상: {all_images_list[0].shape}, 실제: {data.shape} ({os.path.basename(file_path)})."
                     logger_fits.error(err_msg)
                     raise ValueError(err_msg) 
@@ -65,8 +83,11 @@ def load_fits_from_gradio_files(file_objects, object_type="프레임"):
             logger_fits.error(f"FITS file not found for {object_type}: {file_path}")
             all_headers.append(None) 
             raise
-        except ValueError as ve:
+        except ValueError as ve: # 크기 불일치 등
             logger_fits.error(f"ValueError during FITS loading from {file_path} for {object_type}: {ve}")
+            # ValueError 발생 시 해당 파일은 스택에 추가되지 않음. all_headers에는 이미 None이 추가되었거나, 이전 유효 헤더가 있을 수 있음.
+            # 일관성을 위해, 오류 발생 시 해당 파일의 헤더는 None으로 간주하고 넘어가는 것이 나을 수 있으나,
+            # 여기서는 예외를 발생시켜 호출자가 처리하도록 함.
             raise
         except Exception as e:
             logger_fits.error(f"Failed to load FITS file {file_path} for {object_type}: {e}", exc_info=True)
@@ -81,7 +102,7 @@ def load_fits_from_gradio_files(file_objects, object_type="프레임"):
     try:
         stacked_images = np.stack(all_images_list, axis=0)
         logger_fits.info(f"Stacked {len(all_images_list)} images for {object_type}. Stack shape: {stacked_images.shape}")
-        return stacked_images, first_header, all_headers
+        return stacked_images, first_valid_header, all_headers # first_header 대신 first_valid_header
     except Exception as e: 
         logger_fits.error(f"Failed to stack images for {object_type}: {e}", exc_info=True)
         raise RuntimeError(f"{object_type} 이미지 스택 중 오류: {e}")
@@ -190,3 +211,36 @@ def create_preview_image(fits_data_2d, stretch_type='asinh', a_param=0.1):
     except Exception as e:
         logger_fits.error(f"미리보기 이미지 생성 중 오류 발생: {e}", exc_info=True)
         return None
+
+def draw_roi_on_pil_image(base_pil_image, roi_x_min, roi_x_max, roi_y_min, roi_y_max):
+    if base_pil_image is None:
+        logger_fits.warning("ROI를 그릴 기본 이미지가 없습니다.")
+        return None 
+    
+    try:
+        img_with_roi = base_pil_image.copy()
+        if img_with_roi.mode == 'L':
+            img_with_roi = img_with_roi.convert('RGB')
+            
+        draw = ImageDraw.Draw(img_with_roi)
+        
+        if roi_x_min is not None and roi_x_max is not None and \
+           roi_y_min is not None and roi_y_max is not None:
+            
+            img_width, img_height = img_with_roi.size
+            x0 = np.clip(int(roi_x_min), 0, img_width -1)
+            x1 = np.clip(int(roi_x_max), 0, img_width -1)
+            y0 = np.clip(int(roi_y_min), 0, img_height -1)
+            y1 = np.clip(int(roi_y_max), 0, img_height -1)
+
+            if x1 > x0 and y1 > y0: 
+                draw.rectangle([(x0, y0), (x1, y1)], outline="lime", width=2) 
+                logger_fits.debug(f"ROI 사각형 그림: ({x0},{y0})-({x1},{y1})")
+            else:
+                logger_fits.debug("ROI 좌표가 유효하지 않아 사각형을 그리지 않음 (예: x_max <= x_min).")
+        
+        return img_with_roi
+    except Exception as e:
+        logger_fits.error(f"ROI 시각화 이미지 생성 중 오류: {e}", exc_info=True)
+        return base_pil_image 
+
