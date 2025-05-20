@@ -314,6 +314,8 @@ with gr.Blocks(title="천체사진 처리 도구 v0.13 (ccdproc 적용 및 로�
     logger_main.info("Gradio UI 정의 완료.")
 
 if __name__ == "__main__":
+    terminal_command = "ulimit -n 10000" #세션 파일수 제한 늘리기
+    os.system(terminal_command)
     logger_main.info("천체사진 처리 도구 Gradio 앱 시작 중...")
     import atexit
     def cleanup_temp_dir():

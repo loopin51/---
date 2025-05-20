@@ -10,7 +10,7 @@ import ccdproc as ccdp
 
 logger_calib = logging.getLogger(__name__)
 
-def create_master_bias_ccdproc(bias_file_paths, mem_limit=2e8): 
+def create_master_bias_ccdproc(bias_file_paths, mem_limit=2e9): 
     if not bias_file_paths:
         logger_calib.warning("BIAS 파일 경로 리스트가 비어있습니다.")
         return None
@@ -29,7 +29,7 @@ def create_master_bias_ccdproc(bias_file_paths, mem_limit=2e8):
         logger_calib.error(f"ccdproc로 Master BIAS 생성 중 오류: {e}", exc_info=True)
         raise RuntimeError(f"Master BIAS 생성 실패 (ccdproc): {str(e)[:100]}")
 
-def create_master_dark_ccdproc(dark_file_paths, master_bias_ccd, mem_limit=2e8): 
+def create_master_dark_ccdproc(dark_file_paths, master_bias_ccd, mem_limit=2e9): 
     if not dark_file_paths:
         logger_calib.warning("DARK 파일 경로 리스트가 비어있습니다.")
         return None
@@ -70,7 +70,7 @@ def create_master_dark_ccdproc(dark_file_paths, master_bias_ccd, mem_limit=2e8):
         logger_calib.error(f"ccdproc로 Master DARK 생성 중 오류: {e}", exc_info=True)
         raise RuntimeError(f"Master DARK 생성 실패 (ccdproc): {str(e)[:100]}")
 
-def create_master_flat_ccdproc(flat_file_paths, master_bias_ccd, master_dark_for_flat_ccd, mem_limit=2e8):
+def create_master_flat_ccdproc(flat_file_paths, master_bias_ccd, master_dark_for_flat_ccd, mem_limit=2e9):
     if not flat_file_paths:
         logger_calib.warning("FLAT 파일 경로 리스트가 비어있습니다.")
         return None
