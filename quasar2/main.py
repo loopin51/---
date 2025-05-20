@@ -35,7 +35,7 @@ logging.basicConfig(
 logger_main = logging.getLogger(__name__)
 
 # --- Gradio 업로드용 임시 디렉토리 설정 ---
-GRADIO_CUSTOM_TEMP_DIR = None # 전역 변수로 선언
+GRADIO_CUSTOM_TEMP_DIR = None 
 try:
     script_directory = os.path.dirname(os.path.abspath(__file__))
     gradio_uploads_dir_name = "gradio_temp_files"  
@@ -45,10 +45,10 @@ try:
     logger_main.info(f"Gradio 업로드용 임시 디렉토리 설정됨: {GRADIO_CUSTOM_TEMP_DIR}")
 except Exception as e:
     logger_main.error(f"Gradio 업로드용 임시 디렉토리 설정 실패: {e}. 기본 시스템 임시 디렉토리가 사용됩니다.", exc_info=True)
-    GRADIO_CUSTOM_TEMP_DIR = None # 설정 실패 시 None으로 유지
+    GRADIO_CUSTOM_TEMP_DIR = None 
 
 # --- 애플리케이션 자체 생성 파일용 임시 디렉토리 설정 ---
-APP_TEMP_OUTPUT_DIR = None # 전역 변수로 선언
+APP_TEMP_OUTPUT_DIR = None 
 try:
     script_directory = os.path.dirname(os.path.abspath(__file__)) 
     app_outputs_dir_name = "gradio_temp_outputs" 
@@ -66,15 +66,15 @@ except Exception as e:
         logger_main.error(f"최후의 수단으로 현재 작업 디렉토리를 임시 파일용으로 사용 (애플리케이션 출력용): {os.path.abspath(APP_TEMP_OUTPUT_DIR)}")
 
 
-with gr.Blocks(title="천체사진 처리 도구 v0.13 (ccdproc 적용 및 로직 개선)", theme=gr.themes.Soft()) as app: 
+with gr.Blocks(title="천체사진 처리 도구 v0.17 (예비 플랫 및 ccdproc 개선)", theme=gr.themes.Soft()) as app: 
     logger_main.info("Gradio Blocks UI 정의 시작.")
-    gr.Markdown("# 천체사진 처리 도구 v0.13 (ccdproc 적용 및 H-R도 탭 추가)") 
+    gr.Markdown("# 천체사진 처리 도구 v0.17 (예비 플랫 및 ccdproc 개선)") 
     gr.Markdown("탭을 선택하여 원하는 작업을 수행하세요. 로그는 콘솔 및 각 탭의 로그 창에 출력됩니다.")
 
     # 상태 변수
     state_master_bias_path = gr.State(None)
     state_master_darks_corrected_dict = gr.State({}) 
-    state_master_flats_corrected_dict = gr.State({}) 
+    state_prelim_flats_dict = gr.State({}) # 예비 플랫 딕셔너리로 변경
     
     # 탭4 ROI용 상태 변수
     state_tab4_roi_image_data_b = gr.State(None) 
@@ -84,25 +84,25 @@ with gr.Blocks(title="천체사진 처리 도구 v0.13 (ccdproc 적용 및 로�
     with gr.Tabs():
         # --- 탭 1 정의 (UI 출력 부분 수정) ---
         with gr.TabItem("1. 마스터 프레임 생성 (ccdproc)"): 
-            gr.Markdown("## 마스터 프레임 (BIAS, DARK, FLAT) 생성 (ccdproc 사용)")
+            gr.Markdown("## 마스터 프레임 (BIAS, DARK, 예비 FLAT) 생성 (ccdproc 사용)")
             gr.Markdown("각 타입의 FITS 파일들을 업로드하여 마스터 보정 프레임을 생성합니다.\n"
-                        "DARK는 노출시간별로, FLAT 프레임은 FITS 헤더의 'FILTER'와 'EXPTIME' 키워드를 읽어 필터/노출시간별로 자동 분류되어 처리됩니다.")
+                        "DARK는 노출시간별로, FLAT 프레임은 FITS 헤더의 'FILTER' 키워드를 읽어 필터별로 \"예비 마스터 플랫\"이 생성됩니다 (BIAS/DARK 보정 안됨).")
             with gr.Row():
                 tab1_bias_input = gr.File(label="BIAS 프레임 업로드 (.fits)", file_count="multiple", file_types=[".fits", ".fit"], type="filepath")
                 tab1_dark_input = gr.File(label="DARK 프레임 업로드 (다양한 노출시간 혼합 가능)", file_count="multiple", file_types=[".fits", ".fit"], type="filepath")
-                tab1_flat_input_all = gr.File(label="FLAT 프레임 업로드 (다양한 필터/노출시간 혼합 가능)", file_count="multiple", file_types=[".fits", ".fit"], type="filepath")
+                tab1_flat_input_all = gr.File(label="FLAT 프레임 업로드 (다양한 필터 혼합 가능)", file_count="multiple", file_types=[".fits", ".fit"], type="filepath")
             
             tab1_process_button = gr.Button("마스터 프레임 생성 시작 (ccdproc)", variant="primary") 
             
             with gr.Accordion("생성된 마스터 프레임 정보 및 로그", open=False):
-                gr.Markdown("생성된 마스터 BIAS, DARK(노출시간별), FLAT(필터/노출시간별)은 내부적으로 저장되어 다른 탭에서 사용됩니다.")
+                gr.Markdown("생성된 마스터 BIAS, DARK(노출시간별), 예비 FLAT(필터별)은 내부적으로 저장되어 다른 탭에서 사용됩니다.")
                 with gr.Row(): 
                     tab1_bias_output_ui = gr.File(label="다운로드: Master BIAS", interactive=False)
                     tab1_dark_output_ui_msg = gr.Textbox(label="Master DARKs 정보", value="노출시간별 Master Dark 생성됨 (로그 확인)", interactive=False, lines=3)
                 with gr.Row(): 
-                    tab1_flat_b_output_ui_msg = gr.Textbox(label="Master FLAT B 정보", value="생성된 Master Flat B 없음", interactive=False, lines=2)
-                    tab1_flat_v_output_ui_msg = gr.Textbox(label="Master FLAT V 정보", value="생성된 Master Flat V 없음", interactive=False, lines=2)
-                    tab1_flat_generic_output_ui_msg = gr.Textbox(label="Master FLAT Generic 정보", value="생성된 Master Flat Generic 없음", interactive=False, lines=2)
+                    tab1_flat_b_output_ui_msg = gr.Textbox(label="예비 Master FLAT B 정보", value="생성된 예비 Master Flat B 없음", interactive=False, lines=2)
+                    tab1_flat_v_output_ui_msg = gr.Textbox(label="예비 Master FLAT V 정보", value="생성된 예비 Master Flat V 없음", interactive=False, lines=2)
+                    tab1_flat_generic_output_ui_msg = gr.Textbox(label="예비 Master FLAT Generic 정보", value="생성된 예비 Master Flat Generic 없음", interactive=False, lines=2)
 
                 tab1_status_output = gr.Textbox(label="처리 상태 및 요약 로그", lines=10, interactive=False, show_copy_button=True)
 
@@ -114,7 +114,7 @@ with gr.Blocks(title="천체사진 처리 도구 v0.13 (ccdproc 적용 및 로�
                     tab1_flat_b_output_ui_msg, tab1_flat_v_output_ui_msg, tab1_flat_generic_output_ui_msg, 
                     state_master_bias_path, 
                     state_master_darks_corrected_dict, 
-                    state_master_flats_corrected_dict, 
+                    state_prelim_flats_dict, # 변경됨
                     tab1_status_output
                 ]
             )
@@ -123,9 +123,8 @@ with gr.Blocks(title="천체사진 처리 도구 v0.13 (ccdproc 적용 및 로�
         with gr.TabItem("2. LIGHT 프레임 보정 (ccdproc)"): 
             gr.Markdown("## LIGHT 프레임 보정 및 미리보기 (ccdproc 사용)")
             gr.Markdown(
-                "LIGHT 프레임(들)을 업로드하여 보정하고, 첫 번째 보정 결과를 미리봅니다.\n"
-                "탭 1에서 생성된 마스터 프레임이 LIGHT 프레임의 필터와 노출시간에 맞춰 자동으로 사용됩니다.\n"
-                "필요시 아래에서 마스터 BIAS, DARK(Raw, 다수 가능), 필터별 FLAT(Raw 또는 Corrected)을 직접 업로드하여 탭1의 결과보다 우선 사용할 수 있습니다."
+                "LIGHT 프레임(들)을 업로드하여 보정합니다. 탭 1에서 생성된 예비 마스터 플랫은 LIGHT 프레임의 노출시간에 맞는 DARK로 실시간 보정 후 사용됩니다.\n"
+                "필요시 아래에서 마스터 BIAS, DARK(Raw, 다수 가능), 필터별 FLAT(Raw 또는 Corrected)을 직접 업로드할 수 있습니다."
             )
             with gr.Row():
                 with gr.Column(scale=3): 
@@ -153,7 +152,7 @@ with gr.Blocks(title="천체사진 처리 도구 v0.13 (ccdproc 적용 및 로�
                     tab2_uploaded_flat_b_obj, tab2_uploaded_flat_v_obj,   
                     state_master_bias_path, 
                     state_master_darks_corrected_dict, 
-                    state_master_flats_corrected_dict, 
+                    state_prelim_flats_dict, # 변경됨
                     tab2_preview_stretch, 
                     tab2_asinh_a_param,
                     gr.State(APP_TEMP_OUTPUT_DIR) 
@@ -189,7 +188,7 @@ with gr.Blocks(title="천체사진 처리 도구 v0.13 (ccdproc 적용 및 로�
                     tab3_mf_b_raw_input, tab3_mf_v_raw_input,
                     state_master_bias_path, 
                     state_master_darks_corrected_dict, 
-                    state_master_flats_corrected_dict, 
+                    state_prelim_flats_dict, # 변경됨
                     tab3_star_detect_thresh_slider,
                     gr.State(APP_TEMP_OUTPUT_DIR) 
                 ],
@@ -275,7 +274,7 @@ with gr.Blocks(title="천체사진 처리 도구 v0.13 (ccdproc 적용 및 로�
                     tab4_uploaded_mb_obj, tab4_uploaded_md_raw_obj, 
                     tab4_uploaded_mf_b_raw_obj, tab4_uploaded_mf_v_raw_obj,
                     state_master_bias_path, state_master_darks_corrected_dict, 
-                    state_master_flats_corrected_dict, 
+                    state_prelim_flats_dict, # 변경됨
                     tab4_kb_input, tab4_m0b_input_user, tab4_kv_input, tab4_m0v_input_user,
                     tab4_dao_fwhm_input, tab4_dao_thresh_nsigma_input, tab4_phot_ap_radius_input,
                     tab4_roi_x_min_slider, tab4_roi_x_max_slider, 
@@ -315,7 +314,6 @@ with gr.Blocks(title="천체사진 처리 도구 v0.13 (ccdproc 적용 및 로�
 
 if __name__ == "__main__":
     terminal_command = "ulimit -n 10000" #세션 파일수 제한 늘리기
-    os.system(terminal_command)
     logger_main.info("천체사진 처리 도구 Gradio 앱 시작 중...")
     import atexit
     def cleanup_temp_dir():
@@ -330,9 +328,6 @@ if __name__ == "__main__":
         except Exception as e:
             logger_main.error(f"앱 출력 임시 디렉토리 정리 중 오류 {APP_TEMP_OUTPUT_DIR}: {e}", exc_info=True)
 
-        # GRADIO_CUSTOM_TEMP_DIR (Gradio 업로드 파일용) 정리
-        # 이 변수는 astro_app_main.py 상단에서 설정되므로, 여기서도 접근 가능해야 함
-        # 단, GRADIO_CUSTOM_TEMP_DIR이 None이 아니고, APP_TEMP_OUTPUT_DIR과 다른 경우에만 삭제 시도
         if 'GRADIO_CUSTOM_TEMP_DIR' in globals() and GRADIO_CUSTOM_TEMP_DIR and GRADIO_CUSTOM_TEMP_DIR != APP_TEMP_OUTPUT_DIR:
             logger_main.info(f"Gradio 업로드 임시 디렉토리 정리 시도: {GRADIO_CUSTOM_TEMP_DIR}")
             try:
@@ -347,6 +342,5 @@ if __name__ == "__main__":
 
     atexit.register(cleanup_temp_dir)
     logger_main.info(f"임시 디렉토리 자동 정리 기능 등록됨 (atexit).")
-
     app.launch(share=True, debug=True) 
     logger_main.info("Gradio 앱이 종료되었습니다.")

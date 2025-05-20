@@ -6,7 +6,7 @@ import os
 import numpy as np
 from astropy.io import fits
 from astropy.visualization import ZScaleInterval, ImageNormalize, AsinhStretch, LogStretch, LinearStretch
-from PIL import Image, ImageDraw, ImageFont # ImageFont 추가
+from PIL import Image, ImageDraw, ImageFont 
 import logging
 
 logger_fits = logging.getLogger(__name__) 
@@ -226,33 +226,27 @@ def draw_photometry_results_on_image(base_pil_image, stars_info_list,
                                      circle_radius=10, 
                                      circle_color="yellow", 
                                      text_color="yellow", 
-                                     font_size=12):
-    """
-    PIL 이미지 위에 별 위치에 원을 그리고 등급/ID 텍스트를 표시합니다.
-    stars_info_list: 각 별의 정보를 담은 딕셔너리 리스트. 
-                     각 딕셔너리는 'x', 'y', 'mag_display', 'id_text' 키를 가져야 함.
-    roi_coords: (x_min, x_max, y_min, y_max) 튜플. 이 범위 내의 별만 그림.
-    """
+                                     font_size=10):
     if base_pil_image is None:
         logger_fits.warning("별 정보를 그릴 기본 이미지가 없습니다.")
         return None
     
     try:
         img_with_stars = base_pil_image.copy()
-        if img_with_stars.mode == 'L': # 흑백이면 RGB로 변환해야 컬러로 그릴 수 있음
+        if img_with_stars.mode == 'L': 
             img_with_stars = img_with_stars.convert('RGB')
         draw = ImageDraw.Draw(img_with_stars)
         
         try:
-            font = ImageFont.truetype("arial.ttf", font_size) # 기본 폰트 시도
+            font = ImageFont.truetype("arial.ttf", font_size) 
         except IOError:
-            font = ImageFont.load_default() # 실패 시 Gradio 기본 폰트
+            font = ImageFont.load_default() 
             logger_fits.warning("Arial 폰트를 찾을 수 없어 기본 폰트를 사용합니다.")
 
         img_width, img_height = img_with_stars.size
         
-        roi_x0, roi_x1, roi_y0, roi_y1 = -1, img_width+1, -1, img_height+1 # 기본값: 전체 영역
-        if roi_coords:
+        roi_x0, roi_x1, roi_y0, roi_y1 = 0, img_width, 0, img_height 
+        if roi_coords and len(roi_coords) == 4:
             roi_x0 = int(roi_coords[0])
             roi_x1 = int(roi_coords[1])
             roi_y0 = int(roi_coords[2])
@@ -262,38 +256,29 @@ def draw_photometry_results_on_image(base_pil_image, stars_info_list,
         drawn_star_count = 0
         for star_info in stars_info_list:
             x, y = star_info.get('x'), star_info.get('y')
-            mag_display = star_info.get('mag_display', np.nan) # 표시할 등급
-            id_text = star_info.get('id_text', '') # 표시할 ID
+            mag_display = star_info.get('mag_display', np.nan) 
+            id_text = star_info.get('id_text', '') 
 
             if x is None or y is None or not np.isfinite(x) or not np.isfinite(y):
                 continue
 
-            # ROI 필터링
             if roi_coords and not (roi_x0 <= x <= roi_x1 and roi_y0 <= y <= roi_y1):
                 continue
             
-            # 이미지 경계 내에 있는지 확인
             if not (0 <= x < img_width and 0 <= y < img_height):
                 continue
 
-            # 원 그리기 (중심점 기준)
-            bbox = [
-                x - circle_radius, y - circle_radius,
-                x + circle_radius, y + circle_radius
-            ]
+            bbox = [x - circle_radius, y - circle_radius, x + circle_radius, y + circle_radius]
             draw.ellipse(bbox, outline=circle_color, width=1)
             
-            # 텍스트 표시
             text_to_show = ""
-            if np.isfinite(mag_display):
-                text_to_show += f"{mag_display:.2f}"
+            if np.isfinite(mag_display): text_to_show += f"{mag_display:.2f}"
             if id_text and id_text not in ["N/A", "WCS 없음", "SIMBAD 오류", "좌표 없음"]:
-                if text_to_show: text_to_show += f" ({id_text})"
-                else: text_to_show = id_text
+                if text_to_show: text_to_show += f" ({id_text.split('(')[0].strip()})" 
+                else: text_to_show = id_text.split('(')[0].strip()
             
             if text_to_show:
-                # 텍스트 위치는 원의 약간 오른쪽 아래로 조정
-                text_position = (x + circle_radius + 2, y + circle_radius + 2)
+                text_position = (x + circle_radius + 2, y - font_size / 2) 
                 draw.text(text_position, text_to_show, fill=text_color, font=font)
             drawn_star_count +=1
         
@@ -302,4 +287,5 @@ def draw_photometry_results_on_image(base_pil_image, stars_info_list,
 
     except Exception as e:
         logger_fits.error(f"별 정보 시각화 중 오류: {e}", exc_info=True)
-        return base_pil_image # 오류 시 원본 이미지 반환
+        return base_pil_image 
+
