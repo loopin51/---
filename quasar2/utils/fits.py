@@ -6,13 +6,12 @@ import os
 import numpy as np
 from astropy.io import fits
 from astropy.visualization import ZScaleInterval, ImageNormalize, AsinhStretch, LogStretch, LinearStretch
-from PIL import Image, ImageDraw 
+from PIL import Image, ImageDraw, ImageFont # ImageFont 추가
 import logging
 
 logger_fits = logging.getLogger(__name__) 
 
 def get_fits_keyword(header, keys, default_value=None, data_type=str, quiet=False):
-    """ FITS 헤더에서 여러 가능한 키워드 중 하나를 찾아 값을 반환합니다. """
     if header is None:
         if not quiet: logger_fits.warning("헤더가 None이므로 키워드를 찾을 수 없습니다.")
         return default_value
@@ -31,10 +30,6 @@ def get_fits_keyword(header, keys, default_value=None, data_type=str, quiet=Fals
     return default_value
 
 def load_fits_data_and_headers_from_file_objs(file_objects, object_type="프레임"):
-    """
-    Gradio 파일 객체 리스트에서 각 FITS 파일의 데이터와 헤더를 로드합니다.
-    반환: 리스트 of (data, header) 튜플, 또는 오류 시 (None, None)
-    """
     logger_fits.debug(f"Attempting to load data and headers from {len(file_objects) if file_objects else 0} FITS files for {object_type}.")
     if not file_objects:
         logger_fits.warning(f"No file objects provided for {object_type}.")
@@ -91,9 +86,6 @@ def load_single_fits_from_path(file_path, description="파일"):
         return None, None 
 
 def save_fits_image(data_object, header_object, base_filename, output_dir, timestamp_str):
-    """
-    NumPy 배열 또는 CCDData 객체를 FITS 파일로 저장합니다.
-    """
     if data_object is None:
         logger_fits.warning(f"No data provided to save for {base_filename}.")
         return None
@@ -108,12 +100,16 @@ def save_fits_image(data_object, header_object, base_filename, output_dir, times
 
     if hasattr(data_object, 'data') and hasattr(data_object, 'header'): # CCDData 객체인 경우
         data_to_save = data_object.data
-        header_to_save = data_object.header.copy() # 원본 헤더 유지 위해 복사
-        if header_object is not None: # 추가 헤더 정보가 있다면 병합 (data_object.header 우선)
+        header_to_save = data_object.header.copy() 
+        if header_object is not None and header_to_save is not header_object : 
             for card in header_object:
                 if card not in header_to_save:
-                    header_to_save.set(card, header_object[card], header_object.comments[card])
-    elif isinstance(data_object, np.ndarray): # NumPy 배열인 경우
+                    try:
+                        header_to_save.set(card, header_object[card], header_object.comments[card])
+                    except Exception as e_hdr:
+                        logger_fits.warning(f"Could not set header card {card} from additional header: {e_hdr}")
+
+    elif isinstance(data_object, np.ndarray): 
         data_to_save = data_object
         header_to_save = header_object.copy() if header_object is not None else fits.Header()
     else:
@@ -139,16 +135,16 @@ def create_preview_image(fits_data_obj, stretch_type='asinh', a_param=0.1):
     logger_fits.info(f"미리보기 이미지 생성 시도 (스트레칭: {stretch_type})")
     
     data_array = None
-    if hasattr(fits_data_obj, 'data'): # CCDData 객체인 경우
+    if hasattr(fits_data_obj, 'data'): 
         data_array = fits_data_obj.data
-    elif isinstance(fits_data_obj, np.ndarray): # NumPy 배열인 경우
+    elif isinstance(fits_data_obj, np.ndarray): 
         data_array = fits_data_obj
     
     if data_array is None or data_array.ndim != 2:
         logger_fits.warning("미리보기를 위한 데이터가 유효하지 않음 (None 또는 2D가 아님).")
         return None
         
-    data_array = data_array.astype(np.float32) # 연산을 위해 float32로
+    data_array = data_array.astype(np.float32) 
 
     try:
         if not np.all(np.isfinite(data_array)):
@@ -224,3 +220,86 @@ def draw_roi_on_pil_image(base_pil_image, roi_x_min, roi_x_max, roi_y_min, roi_y
     except Exception as e:
         logger_fits.error(f"ROI 시각화 이미지 생성 중 오류: {e}", exc_info=True)
         return base_pil_image 
+
+def draw_photometry_results_on_image(base_pil_image, stars_info_list, 
+                                     roi_coords=None, 
+                                     circle_radius=10, 
+                                     circle_color="yellow", 
+                                     text_color="yellow", 
+                                     font_size=12):
+    """
+    PIL 이미지 위에 별 위치에 원을 그리고 등급/ID 텍스트를 표시합니다.
+    stars_info_list: 각 별의 정보를 담은 딕셔너리 리스트. 
+                     각 딕셔너리는 'x', 'y', 'mag_display', 'id_text' 키를 가져야 함.
+    roi_coords: (x_min, x_max, y_min, y_max) 튜플. 이 범위 내의 별만 그림.
+    """
+    if base_pil_image is None:
+        logger_fits.warning("별 정보를 그릴 기본 이미지가 없습니다.")
+        return None
+    
+    try:
+        img_with_stars = base_pil_image.copy()
+        if img_with_stars.mode == 'L': # 흑백이면 RGB로 변환해야 컬러로 그릴 수 있음
+            img_with_stars = img_with_stars.convert('RGB')
+        draw = ImageDraw.Draw(img_with_stars)
+        
+        try:
+            font = ImageFont.truetype("arial.ttf", font_size) # 기본 폰트 시도
+        except IOError:
+            font = ImageFont.load_default() # 실패 시 Gradio 기본 폰트
+            logger_fits.warning("Arial 폰트를 찾을 수 없어 기본 폰트를 사용합니다.")
+
+        img_width, img_height = img_with_stars.size
+        
+        roi_x0, roi_x1, roi_y0, roi_y1 = -1, img_width+1, -1, img_height+1 # 기본값: 전체 영역
+        if roi_coords:
+            roi_x0 = int(roi_coords[0])
+            roi_x1 = int(roi_coords[1])
+            roi_y0 = int(roi_coords[2])
+            roi_y1 = int(roi_coords[3])
+            logger_fits.debug(f"ROI 적용하여 별 마킹: X({roi_x0}-{roi_x1}), Y({roi_y0}-{roi_y1})")
+
+        drawn_star_count = 0
+        for star_info in stars_info_list:
+            x, y = star_info.get('x'), star_info.get('y')
+            mag_display = star_info.get('mag_display', np.nan) # 표시할 등급
+            id_text = star_info.get('id_text', '') # 표시할 ID
+
+            if x is None or y is None or not np.isfinite(x) or not np.isfinite(y):
+                continue
+
+            # ROI 필터링
+            if roi_coords and not (roi_x0 <= x <= roi_x1 and roi_y0 <= y <= roi_y1):
+                continue
+            
+            # 이미지 경계 내에 있는지 확인
+            if not (0 <= x < img_width and 0 <= y < img_height):
+                continue
+
+            # 원 그리기 (중심점 기준)
+            bbox = [
+                x - circle_radius, y - circle_radius,
+                x + circle_radius, y + circle_radius
+            ]
+            draw.ellipse(bbox, outline=circle_color, width=1)
+            
+            # 텍스트 표시
+            text_to_show = ""
+            if np.isfinite(mag_display):
+                text_to_show += f"{mag_display:.2f}"
+            if id_text and id_text not in ["N/A", "WCS 없음", "SIMBAD 오류", "좌표 없음"]:
+                if text_to_show: text_to_show += f" ({id_text})"
+                else: text_to_show = id_text
+            
+            if text_to_show:
+                # 텍스트 위치는 원의 약간 오른쪽 아래로 조정
+                text_position = (x + circle_radius + 2, y + circle_radius + 2)
+                draw.text(text_position, text_to_show, fill=text_color, font=font)
+            drawn_star_count +=1
+        
+        logger_fits.info(f"{drawn_star_count}개의 별을 이미지에 마킹했습니다.")
+        return img_with_stars
+
+    except Exception as e:
+        logger_fits.error(f"별 정보 시각화 중 오류: {e}", exc_info=True)
+        return base_pil_image # 오류 시 원본 이미지 반환
