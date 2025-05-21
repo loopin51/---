@@ -1,7 +1,7 @@
 # ==============================================================================
 # File: utils_astro.py
-# Description: General astronomical calculation functions.
-# (이 파일은 이전 버전과 동일하게 유지됩니다. 변경 사항 없음)
+# Description: 일반적인 천문 계산 관련 유틸리티 함수 모음.
+# 고도, 대기질량, 기기등급, 표준등급 계산, SIMBAD 질의, 좌표 매칭 등.
 # ==============================================================================
 import numpy as np
 from astropy.coordinates import EarthLocation, SkyCoord, AltAz
@@ -15,6 +15,16 @@ import logging
 logger_astro = logging.getLogger(__name__)
 
 def calculate_altitude_extinction(header):
+    """
+    FITS 헤더 정보로부터 천체의 고도(altitude)를 계산합니다.
+    헤더에 직접 고도 정보가 있으면 사용하고, 없으면 관측 시간, 위치, 천체 좌표를 이용해 계산합니다.
+
+    Args:
+        header (astropy.io.fits.Header): FITS 헤더 객체.
+
+    Returns:
+        float or None: 계산된 고도 (도 단위), 실패 시 None.
+    """
     logger_astro.debug("고도 계산 시도...")
     if header is None: logger_astro.warning("고도 계산용 헤더 없음."); return None
     try:
@@ -32,8 +42,7 @@ def calculate_altitude_extinction(header):
         for keys_list, var_name_str in [(lat_str_keys, "lat_str"), (lon_str_keys, "lon_str"), (ra_str_keys, "ra_str"), (dec_str_keys, "dec_str")]:
             val_found = None; 
             for key_item in keys_list: val_found = header.get(key_item); 
-            if val_found is not None: break # Use the first found key's value
-            # Assign to the correct variable based on var_name_str
+            if val_found is not None: break 
             if var_name_str == "lat_str": lat_str = val_found
             elif var_name_str == "lon_str": lon_str = val_found
             elif var_name_str == "ra_str": ra_str = val_found
@@ -59,6 +68,16 @@ def calculate_altitude_extinction(header):
     except Exception as e: logger_astro.warning(f"고도 계산 중 오류: {e}", exc_info=False); return None
 
 def calculate_airmass_extinction(header):
+    """
+    FITS 헤더 정보로부터 천체의 대기질량(airmass)을 계산합니다.
+    헤더에 직접 대기질량 정보가 있으면 사용하고, 없으면 고도를 이용해 Pickering (2002) 공식을 사용합니다.
+
+    Args:
+        header (astropy.io.fits.Header): FITS 헤더 객체.
+
+    Returns:
+        float or None: 계산된 대기질량, 실패 시 None.
+    """
     logger_astro.debug("대기질량 계산 시도...")
     if header is None: logger_astro.warning("대기질량 계산용 헤더 없음."); return None
     try:
@@ -80,6 +99,15 @@ def calculate_airmass_extinction(header):
     except Exception as e: logger_astro.warning(f"대기질량 계산 오류: {e}", exc_info=False); return None
 
 def calculate_instrumental_magnitude(flux):
+    """
+    측광된 flux 값으로부터 기기 등급(instrumental magnitude)을 계산합니다.
+
+    Args:
+        flux (float): 별의 net flux 값.
+
+    Returns:
+        float or None: 계산된 기기 등급, flux가 유효하지 않으면 None.
+    """
     if flux is None or not np.isfinite(flux) or flux <= 1e-9: 
         logger_astro.warning(f"유효X/매우 작은 flux ({flux})로 기기등급 계산 불가.")
         return None
@@ -87,6 +115,22 @@ def calculate_instrumental_magnitude(flux):
     except Exception as e: logger_astro.error(f"기기등급 계산 오류 (flux={flux}): {e}", exc_info=True); return None
 
 def perform_linear_regression_extinction(airmasses, magnitudes):
+    """
+    주어진 대기질량(X)과 기기등급(m_inst) 데이터로부터 선형 회귀를 수행하여
+    대기소광계수(k)와 영점(m0)을 계산합니다. (m_inst = m0 + k*X)
+
+    Args:
+        airmasses (list or np.ndarray): 대기질량 값들의 리스트.
+        magnitudes (list or np.ndarray): 해당 기기등급 값들의 리스트.
+
+    Returns:
+        tuple: (slope, intercept, r_squared, model)
+               slope (float): 대기소광계수 k.
+               intercept (float): 영점 m0.
+               r_squared (float): 결정 계수 R².
+               model (sklearn.linear_model.LinearRegression): 학습된 회귀 모델.
+               실패 시 (None, None, None, None).
+    """
     logger_astro.debug(f"선형 회귀 시작: {len(airmasses)}개의 데이터 포인트.")
     valid_indices = [i for i, (am,mg) in enumerate(zip(airmasses,magnitudes)) if am is not None and mg is not None and np.isfinite(am) and np.isfinite(mg) and am > 0]
     if len(valid_indices) < 2: logger_astro.warning(f"선형 회귀 유효 데이터 부족 ({len(valid_indices)}개)."); return None,None,None,None
@@ -99,6 +143,18 @@ def perform_linear_regression_extinction(airmasses, magnitudes):
     except Exception as e: logger_astro.error(f"선형 회귀 오류: {e}", exc_info=True); return None,None,None,None
 
 def convert_pixel_to_wcs(x_coords, y_coords, fits_header):
+    """
+    FITS 헤더의 WCS 정보를 사용하여 픽셀 좌표를 천구 좌표(RA, Dec)로 변환합니다.
+
+    Args:
+        x_coords (float or list/np.ndarray): 변환할 X 픽셀 좌표(들).
+        y_coords (float or list/np.ndarray): 변환할 Y 픽셀 좌표(들).
+        fits_header (astropy.io.fits.Header): WCS 정보가 포함된 FITS 헤더.
+
+    Returns:
+        tuple: (ra_degrees, dec_degrees)
+               변환 실패 시 (None, None).
+    """
     if fits_header is None: logger_astro.warning("WCS 변환용 FITS 헤더 없음."); return None, None
     try:
         w = WCS(fits_header)
@@ -109,6 +165,19 @@ def convert_pixel_to_wcs(x_coords, y_coords, fits_header):
     except Exception as e: logger_astro.error(f"픽셀-WCS 변환 오류: {e}", exc_info=True); return None, None
 
 def calculate_standard_magnitude(instrumental_mag, airmass, k_coeff, m0_coeff):
+    """
+    기기 등급, 대기질량, 대기소광계수, 영점을 이용하여 표준 등급을 계산합니다.
+    M_std = m_inst - k*X - m0
+
+    Args:
+        instrumental_mag (float): 기기 등급.
+        airmass (float): 대기질량 (X).
+        k_coeff (float): 대기소광계수 (k).
+        m0_coeff (float): 영점 (m0).
+
+    Returns:
+        float or np.nan: 계산된 표준 등급, 입력값 유효하지 않으면 np.nan.
+    """
     if instrumental_mag is None or airmass is None or k_coeff is None or m0_coeff is None or \
        not np.isfinite(instrumental_mag) or not np.isfinite(airmass) or \
        not np.isfinite(k_coeff) or not np.isfinite(m0_coeff):
@@ -121,6 +190,18 @@ def calculate_standard_magnitude(instrumental_mag, airmass, k_coeff, m0_coeff):
     except Exception as e: logger_astro.error(f"표준등급 계산 오류: {e}", exc_info=True); return np.nan
 
 def query_simbad_for_object(ra_deg, dec_deg, radius_arcsec=5.0):
+    """
+    주어진 천구 좌표(RA, Dec) 근처의 천체를 SIMBAD에서 조회합니다.
+
+    Args:
+        ra_deg (float): RA (도 단위).
+        dec_deg (float): Dec (도 단위).
+        radius_arcsec (float, optional): 검색 반경 (arcsecond 단위). Defaults to 5.0.
+
+    Returns:
+        str: 찾은 천체의 주 ID와 타입 (예: "M 31 (Galaxy)").
+             못 찾거나 오류 시 "N/A", "좌표 없음", "SIMBAD 오류" 등 반환.
+    """
     if ra_deg is None or dec_deg is None or not np.isfinite(ra_deg) or not np.isfinite(dec_deg): return "좌표 없음"
     try:
         logger_astro.debug(f"SIMBAD 질의: RA={ra_deg:.5f}, Dec={dec_deg:.5f}, Radius={radius_arcsec} arcsec")
@@ -129,24 +210,41 @@ def query_simbad_for_object(ra_deg, dec_deg, radius_arcsec=5.0):
         coord = SkyCoord(ra=ra_deg*u.deg, dec=dec_deg*u.deg, frame='icrs')
         simbad_query.TIMEOUT = 10 
         result_table = simbad_query.query_region(coord, radius=radius_arcsec * u.arcsec)
-        if result_table is None or len(result_table) == 0: logger_astro.debug("SIMBAD: 해당 좌표 근처 천체 없음."); return "N/A"
+        
+        if result_table is None or len(result_table) == 0: 
+            logger_astro.debug("SIMBAD: 해당 좌표 근처 천체 없음."); return "N/A"
         else:
             main_id = result_table['MAIN_ID'][0].decode('utf-8') if isinstance(result_table['MAIN_ID'][0], bytes) else str(result_table['MAIN_ID'][0])
             obj_type_bytes = result_table['OTYPE'][0]
             obj_type = obj_type_bytes.decode('utf-8') if isinstance(obj_type_bytes, bytes) else str(obj_type_bytes)
             logger_astro.info(f"SIMBAD 결과: ID={main_id}, Type={obj_type}"); return f"{main_id} ({obj_type})"
-    except Exception as e: logger_astro.error(f"SIMBAD 질의 오류 (RA={ra_deg}, Dec={dec_deg}): {e}", exc_info=False); return "SIMBAD 오류"
+    except Exception as e: 
+        logger_astro.error(f"SIMBAD 질의 오류 (RA={ra_deg}, Dec={dec_deg}): {e}", exc_info=False); return "SIMBAD 오류"
 
 def match_stars_by_coords(coords_ref, coords_target, tolerance_arcsec):
+    """
+    두 별 목록의 천구 좌표를 비교하여 서로 매칭되는 별들의 인덱스를 찾습니다.
+
+    Args:
+        coords_ref (astropy.coordinates.SkyCoord): 기준 별 목록의 SkyCoord 객체.
+        coords_target (astropy.coordinates.SkyCoord): 대상 별 목록의 SkyCoord 객체.
+        tolerance_arcsec (float): 매칭 허용 오차 (arcsecond 단위).
+
+    Returns:
+        tuple: (matched_ref_indices, matched_target_indices, matched_separations_arcsec)
+               각 리스트는 매칭된 별들의 인덱스와 각도 거리를 담고 있음.
+    """
     if coords_ref is None or coords_target is None or len(coords_ref) == 0 or len(coords_target) == 0: return [], [], []
     try:
         idx_target, sep2d_angle, _ = coords_ref.match_to_catalog_sky(coords_target)
         matched_ref_indices, matched_target_indices, matched_separations_arcsec = [], [], []
-        separation_tolerance = tolerance_arcsec * u.arcsec
+        separation_tolerance = tolerance_arcsec * u.arcsec 
+
         for i_ref in range(len(coords_ref)):
-            if sep2d_angle[i_ref] < separation_tolerance:
+            if sep2d_angle[i_ref] < separation_tolerance: 
                 matched_ref_indices.append(i_ref)
                 matched_target_indices.append(idx_target[i_ref])
                 matched_separations_arcsec.append(sep2d_angle[i_ref].arcsec)
         logger_astro.info(f"{len(matched_ref_indices)}개 별 매칭 성공 (허용오차: {tolerance_arcsec} arcsec)."); return matched_ref_indices, matched_target_indices, matched_separations_arcsec
-    except Exception as e: logger_astro.error(f"별 좌표 매칭 오류: {e}", exc_info=True); return [], [], []
+    except Exception as e: 
+        logger_astro.error(f"별 좌표 매칭 오류: {e}", exc_info=True); return [], [], []

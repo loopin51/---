@@ -1,6 +1,6 @@
 # ==============================================================================
 # File: utils_calibration.py
-# Description: Functions for creating master calibration frames using ccdproc.
+# Description: ccdproc를 사용하여 마스터 보정 프레임 생성 함수 모음.
 # ==============================================================================
 import numpy as np
 import logging
@@ -11,6 +11,16 @@ import ccdproc as ccdp
 logger_calib = logging.getLogger(__name__)
 
 def create_master_bias_ccdproc(bias_file_paths, mem_limit=2e9): 
+    """
+    ccdproc를 사용하여 여러 BIAS 파일로부터 마스터 BIAS를 생성합니다.
+
+    Args:
+        bias_file_paths (list): BIAS FITS 파일 경로들의 리스트.
+        mem_limit (float, optional): ccdproc.combine에서 사용할 메모리 제한 (바이트 단위). Defaults to 2e8.
+
+    Returns:
+        CCDData or None: 생성된 마스터 BIAS (CCDData 객체), 실패 시 None.
+    """
     if not bias_file_paths:
         logger_calib.warning("BIAS 파일 경로 리스트가 비어있습니다.")
         return None
@@ -18,7 +28,7 @@ def create_master_bias_ccdproc(bias_file_paths, mem_limit=2e9):
     try:
         master_bias = ccdp.combine(
             bias_file_paths, 
-            method='average',
+            method='median',
             sigma_clip=True, sigma_clip_low_thresh=5, sigma_clip_high_thresh=5, 
             mem_limit=mem_limit, 
             unit=u.adu 
@@ -30,6 +40,18 @@ def create_master_bias_ccdproc(bias_file_paths, mem_limit=2e9):
         raise RuntimeError(f"Master BIAS 생성 실패 (ccdproc): {str(e)[:100]}")
 
 def create_master_dark_ccdproc(dark_file_paths, master_bias_ccd, mem_limit=2e9): 
+    """
+    ccdproc를 사용하여 (BIAS가 보정된) 마스터 DARK를 생성합니다.
+    입력된 모든 DARK 프레임은 동일한 노출 시간을 가져야 합니다.
+
+    Args:
+        dark_file_paths (list): 동일 노출 시간의 DARK FITS 파일 경로 리스트.
+        master_bias_ccd (CCDData or None): 마스터 BIAS (CCDData 객체). None이면 BIAS 보정 생략.
+        mem_limit (float, optional): ccdproc.combine에서 사용할 메모리 제한. Defaults to 2e8.
+
+    Returns:
+        CCDData or None: 생성된 마스터 DARK (CCDData 객체), 실패 시 None.
+    """
     if not dark_file_paths:
         logger_calib.warning("DARK 파일 경로 리스트가 비어있습니다.")
         return None
@@ -45,7 +67,7 @@ def create_master_dark_ccdproc(dark_file_paths, master_bias_ccd, mem_limit=2e9):
                         dark_corrected_single = ccdp.subtract_bias(dark_ccd_raw, master_bias_ccd)
                         dark_ccds_corrected.append(dark_corrected_single)
                     else:
-                        logger_calib.warning(f"DARK 파일 {df_path}와 Master BIAS의 크기가 불일치. BIAS 보정 건너뜁니다.")
+                        logger_calib.warning(f"DARK 파일 {df_path}와 Master BIAS의 크기가 불일치. BIAS 보정 건너<0xEB><0><0x8F><0xEB><0x82><0xB4>니다.")
                         dark_ccds_corrected.append(dark_ccd_raw) 
                 else:
                     dark_ccds_corrected.append(dark_ccd_raw) 
@@ -59,7 +81,7 @@ def create_master_dark_ccdproc(dark_file_paths, master_bias_ccd, mem_limit=2e9):
 
         master_dark = ccdp.combine(
             dark_ccds_corrected,
-            method='average',
+            method='median',
             sigma_clip=True, sigma_clip_low_thresh=5, sigma_clip_high_thresh=5,
             mem_limit=mem_limit,
             unit=u.adu 
@@ -73,20 +95,26 @@ def create_master_dark_ccdproc(dark_file_paths, master_bias_ccd, mem_limit=2e9):
 def create_preliminary_master_flat_ccdproc(flat_file_paths, mem_limit=2e9):
     """
     ccdproc를 사용하여 BIAS나 DARK를 빼지 않은 "예비 마스터 플랫"을 생성합니다.
-    단순히 여러 Raw Flat들을 결합(평균 또는 중앙값)합니다. 정규화도 하지 않습니다.
+    단순히 여러 Raw Flat들을 결합합니다. (요청사항 반영)
+
+    Args:
+        flat_file_paths (list): 동일 필터의 Raw FLAT FITS 파일 경로 리스트.
+        mem_limit (float, optional): ccdproc.combine에서 사용할 메모리 제한. Defaults to 2e8.
+    
+    Returns:
+        CCDData or None: 생성된 예비 마스터 플랫 (CCDData 객체), 실패 시 None.
     """
     if not flat_file_paths:
         logger_calib.warning("예비 마스터 플랫 생성을 위한 FLAT 파일 경로 리스트가 비어있습니다.")
         return None
     logger_calib.info(f"{len(flat_file_paths)}개의 FLAT 파일로 예비 마스터 플랫 생성 시작 (ccdproc)...")
     try:
-        # Raw Flat들을 바로 결합합니다.
         prelim_master_flat = ccdp.combine(
             flat_file_paths,
-            method='average', # 또는 'median', 플랫은 보통 평균 사용
+            method='average', 
             sigma_clip=True, sigma_clip_low_thresh=5, sigma_clip_high_thresh=5,
             mem_limit=mem_limit,
-            unit=u.adu # 입력 파일들의 단위를 가정
+            unit=u.adu 
         )
         logger_calib.info(f"예비 Master FLAT 생성 완료 (ccdproc). Shape: {prelim_master_flat.shape}")
         return prelim_master_flat

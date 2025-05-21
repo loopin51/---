@@ -11,9 +11,20 @@ import csv
 import pandas as pd 
 import gradio as gr
 
-from utils.fits import load_single_fits_from_path, save_fits_image, create_preview_image, draw_roi_on_pil_image, get_fits_keyword, draw_photometry_results_on_image
-from utils.calibration import create_master_bias_ccdproc, create_master_dark_ccdproc, create_preliminary_master_flat_ccdproc # 수정된 함수명
-from utils.photometry import detect_stars_extinction, find_brightest_star_extinction, calculate_flux_extinction, detect_stars_dao, perform_aperture_photometry_on_detections
+from utils.fits import ( 
+    load_single_fits_from_path, save_fits_image, 
+    create_preview_image, draw_roi_on_pil_image, get_fits_keyword,
+    draw_photometry_results_on_image 
+)
+from utils.calibration import (
+    create_master_bias_ccdproc, create_master_dark_ccdproc, 
+    create_preliminary_master_flat_ccdproc 
+)
+from utils.photometry import (
+    detect_stars_extinction, find_brightest_star_extinction, 
+    calculate_flux_extinction, detect_stars_dao, 
+    perform_aperture_photometry_on_detections
+)
 from utils.astro import (
     calculate_altitude_extinction, calculate_airmass_extinction, 
     calculate_instrumental_magnitude, perform_linear_regression_extinction,
@@ -33,12 +44,15 @@ import ccdproc as ccdp
 logger_ui = logging.getLogger(__name__)
 
 def handle_tab1_master_frame_creation(bias_file_objs, dark_file_objs, flat_file_objs_all, temp_dir):
+    """
+    탭 1: 마스터 프레임 생성 핸들러.
+    BIAS, DARK (노출시간별), 예비 FLAT (필터별)을 생성하고 저장합니다.
+    생성된 DARK 및 예비 FLAT 파일 경로 리스트를 UI에 전달합니다.
+    """
     status_messages = []
-    ui_bias_path = None
-    ui_dark_output_msg = "생성된 Master Dark 없음"
-    ui_flat_b_output_msg = "생성된 예비 Master Flat B 없음" 
-    ui_flat_v_output_msg = "생성된 예비 Master Flat V 없음" 
-    ui_flat_generic_output_msg = "생성된 예비 Master Flat Generic 없음" 
+    ui_bias_path_out = None # 단일 BIAS 파일 경로
+    ui_darks_paths_out = [] # 여러 DARK 파일 경로를 담을 리스트
+    ui_flats_paths_out = [] # 여러 예비 FLAT 파일 경로를 담을 리스트
     
     state_bias_path_out = None
     state_darks_corrected_dict_out = {} 
@@ -47,6 +61,7 @@ def handle_tab1_master_frame_creation(bias_file_objs, dark_file_objs, flat_file_
     master_bias_ccd = None 
     current_timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
 
+    # 1. Master BIAS 생성
     if bias_file_objs:
         try:
             status_messages.append(f"BIAS: {len(bias_file_objs)}개 파일 처리 시작 (ccdproc)...")
@@ -56,19 +71,21 @@ def handle_tab1_master_frame_creation(bias_file_objs, dark_file_objs, flat_file_
                 if master_bias_ccd:
                     bias_header = master_bias_ccd.header if master_bias_ccd.header else fits.Header()
                     saved_path = save_fits_image(master_bias_ccd, bias_header, "master_bias_ccdproc", temp_dir, current_timestamp_str)
-                    if saved_path: ui_bias_path = state_bias_path_out = saved_path; status_messages.append(f"BIAS: 생성 완료: {os.path.basename(ui_bias_path)}")
+                    if saved_path: 
+                        ui_bias_path_out = saved_path # UI File 컴포넌트용
+                        state_bias_path_out = saved_path # 상태 저장용
+                        status_messages.append(f"BIAS: 생성 완료: {os.path.basename(ui_bias_path_out)}")
                     else: status_messages.append("BIAS: 생성 실패 (저장 오류).")
                 else: status_messages.append("BIAS: ccdproc으로 마스터 BIAS 생성 실패.")
             else: status_messages.append("BIAS: 유효한 파일 경로 없음.")
         except Exception as e: logger_ui.error("BIAS 처리 중 오류", exc_info=True); status_messages.append(f"BIAS 처리 오류: {str(e)}"); master_bias_ccd = None
     else: status_messages.append("BIAS: 업로드된 파일 없음.")
 
+    # 2. Master DARK (노출 시간별 Corrected) 생성
     if dark_file_objs:
         status_messages.append(f"DARK: 총 {len(dark_file_objs)}개 파일 처리 시작 (ccdproc)...")
-        
         grouped_dark_paths_by_exp = {} 
         temp_dark_headers_for_saving = {} 
-
         for df_obj in dark_file_objs:
             if df_obj and df_obj.name and os.path.exists(df_obj.name):
                 try:
@@ -80,12 +97,11 @@ def handle_tab1_master_frame_creation(bias_file_objs, dark_file_objs, flat_file_
                                 grouped_dark_paths_by_exp[exp_time] = []
                                 temp_dark_headers_for_saving[exp_time] = header 
                             grouped_dark_paths_by_exp[exp_time].append(df_obj.name)
-                        else: status_messages.append(f"경고: DARK 파일 '{os.path.basename(df_obj.name)}' 노출시간 정보 부족/유효X. 건너<0xEB><0><0x8F><0xEB><0x82><0xB4>니다.")
-                    else: status_messages.append(f"경고: DARK 파일 '{os.path.basename(df_obj.name)}' 헤더 읽기 실패. 건너<0xEB><0><0x8F><0xEB><0x82><0xB4>니다.")
-                except Exception as e_head_dark: status_messages.append(f"경고: DARK 파일 '{os.path.basename(df_obj.name)}' 헤더 읽기 오류: {e_head_dark}. 건너<0xEB><0><0x8F><0xEB><0x82><0xB4>니다.")
-            else: status_messages.append("유효하지 않은 DARK 파일 객체 발견. 건너<0xEB><0><0x8F><0xEB><0x82><0xB4>니다.")
+                        else: status_messages.append(f"경고: DARK 파일 '{os.path.basename(df_obj.name)}' 노출시간 정보 부족/유효X.")
+                    else: status_messages.append(f"경고: DARK 파일 '{os.path.basename(df_obj.name)}' 헤더 읽기 실패.")
+                except Exception as e_head_dark: status_messages.append(f"경고: DARK 파일 '{os.path.basename(df_obj.name)}' 헤더 읽기 오류: {e_head_dark}.")
+            else: status_messages.append("유효하지 않은 DARK 파일 객체 발견.")
             
-        created_darks_info = []
         for exp_time, dark_paths_list in grouped_dark_paths_by_exp.items():
             if not dark_paths_list: continue
             try:
@@ -97,16 +113,15 @@ def handle_tab1_master_frame_creation(bias_file_objs, dark_file_objs, flat_file_
                     saved_path = save_fits_image(master_dark_corrected_ccd, current_dark_header, base_fn, temp_dir, current_timestamp_str)
                     if saved_path:
                         state_darks_corrected_dict_out[exp_time] = saved_path
-                        created_darks_info.append(f"Exp {exp_time}s: {os.path.basename(saved_path)}")
+                        ui_darks_paths_out.append(saved_path) 
+                        status_messages.append(f"Master DARK (Exp {exp_time}s): {os.path.basename(saved_path)} 생성 완료 (경로: {saved_path})")
                     else: status_messages.append(f"Master DARK (Exp: {exp_time}s): 생성 실패 (저장 오류).")
                 else: status_messages.append(f"Master DARK (Exp: {exp_time}s): ccdproc 생성 실패.")
             except Exception as e_md: logger_ui.error(f"Master DARK (Exp: {exp_time}s) 처리 중 오류", exc_info=True); status_messages.append(f"Master DARK (Exp: {exp_time}s) 오류: {str(e_md)}")
-        
-        if created_darks_info: ui_dark_output_msg = "생성된 Master Darks:\n" + "\n".join(created_darks_info)
-        else: ui_dark_output_msg = "유효한 Master Dark 생성 실패 또는 처리할 파일 없음."
+        if not ui_darks_paths_out: status_messages.append("유효한 Master Dark 생성 실패 또는 처리할 파일 없음.")
     else: status_messages.append("DARK: 업로드된 파일 없음.")
 
-    # 3. 예비 Master FLAT (필터별) 생성 (BIAS/DARK 보정 안 함)
+    # 3. 예비 Master FLAT (필터별) 생성
     if flat_file_objs_all:
         status_messages.append(f"예비 FLAT: 총 {len(flat_file_objs_all)}개 파일 처리 시작 (ccdproc)...")
         flat_files_info_grouped_by_filter = {} 
@@ -116,7 +131,6 @@ def handle_tab1_master_frame_creation(bias_file_objs, dark_file_objs, flat_file_
                     _, header = load_single_fits_from_path(ff_obj.name, "FLAT (header check for grouping)")
                     if header:
                         filter_val = get_fits_keyword(header, ['FILTER'], 'Generic').upper()
-                        # 노출 시간은 예비 플랫 그룹핑에 사용하지 않음
                         if filter_val not in flat_files_info_grouped_by_filter:
                             flat_files_info_grouped_by_filter[filter_val] = {'paths': [], 'header': header}
                         flat_files_info_grouped_by_filter[filter_val]['paths'].append(ff_obj.name)
@@ -124,7 +138,6 @@ def handle_tab1_master_frame_creation(bias_file_objs, dark_file_objs, flat_file_
                 except Exception as e_head_flat: status_messages.append(f"경고: FLAT 파일 '{os.path.basename(ff_obj.name)}' 헤더 읽기 오류: {e_head_flat}.")
             else: status_messages.append("유효하지 않은 FLAT 파일 객체 발견.")
 
-        created_flats_b_info, created_flats_v_info, created_flats_g_info = [], [], []
         for filter_name, info_dict in flat_files_info_grouped_by_filter.items():
             flat_paths_list = info_dict['paths']
             first_header_in_group = info_dict['header']
@@ -132,29 +145,56 @@ def handle_tab1_master_frame_creation(bias_file_objs, dark_file_objs, flat_file_
             try:
                 status_messages.append(f"예비 Master FLAT ({filter_name}): {len(flat_paths_list)}개 파일로 생성 시작...")
                 prelim_master_flat_ccd = create_preliminary_master_flat_ccdproc(flat_paths_list) 
-                
                 if prelim_master_flat_ccd:
                     current_flat_header = prelim_master_flat_ccd.header if prelim_master_flat_ccd.header else first_header_in_group
                     base_fn = f"prelim_master_flat_{filter_name}_ccdproc" 
                     saved_path = save_fits_image(prelim_master_flat_ccd, current_flat_header, base_fn, temp_dir, current_timestamp_str)
                     if saved_path:
                         state_prelim_flats_dict_out[filter_name] = saved_path 
-                        info_str = f"({filter_name}): {os.path.basename(saved_path)}"
-                        if filter_name == 'B': created_flats_b_info.append(info_str)
-                        elif filter_name == 'V': created_flats_v_info.append(info_str)
-                        else: created_flats_g_info.append(info_str) 
+                        ui_flats_paths_out.append(saved_path)
+                        status_messages.append(f"예비 Master FLAT ({filter_name}): {os.path.basename(saved_path)} 생성 완료 (경로: {saved_path})")
                     else: status_messages.append(f"예비 Master FLAT ({filter_name}): 생성 실패 (저장 오류).")
                 else: status_messages.append(f"예비 Master FLAT ({filter_name}): ccdproc 생성 실패.")
-            except Exception as e_mf_grp: logger_ui.error(f"예비 Master FLAT ({filter_name}) 처리 오류", exc_info=True); status_messages.append(f"예비 Master FLAT ({filter_name}) 오류: {str(e_mf_grp)}")
-        
-        ui_flat_b_output_msg = "생성된 예비 Master Flat B:\n" + "\n".join(created_flats_b_info) if created_flats_b_info else "생성된 예비 Master Flat B 없음"
-        ui_flat_v_output_msg = "생성된 예비 Master Flat V:\n" + "\n".join(created_flats_v_info) if created_flats_v_info else "생성된 예비 Master Flat V 없음"
-        ui_flat_generic_output_msg = "생성된 예비 Master Flat Generic:\n" + "\n".join(created_flats_g_info) if created_flats_g_info else "생성된 예비 Master Flat Generic 없음"
+            except Exception as e_mf_grp: logger_ui.error(f"예비 Master FLAT ({filter_name}) 처리 중 오류", exc_info=True); status_messages.append(f"예비 Master FLAT ({filter_name}) 오류: {str(e_mf_grp)}")
+        if not ui_flats_paths_out: status_messages.append("유효한 예비 Master Flat 생성 실패 또는 처리할 파일 없음.")
     else: status_messages.append("FLAT: 업로드된 파일 없음.")
         
+    # 원본 파일 삭제 로직
+    all_masters_created_successfully = True 
+    if not state_bias_path_out and bias_file_objs: all_masters_created_successfully = False
+    if not state_darks_corrected_dict_out and dark_file_objs: all_masters_created_successfully = False
+    if not state_prelim_flats_dict_out and flat_file_objs_all: all_masters_created_successfully = False
+    
+    if all_masters_created_successfully and (bias_file_objs or dark_file_objs or flat_file_objs_all):
+        status_messages.append("모든 마스터 프레임 생성 성공. 업로드된 원본 임시 파일 삭제 시도...")
+        files_to_delete_paths = []
+        if bias_file_objs: files_to_delete_paths.extend([f.name for f in bias_file_objs if f and f.name])
+        if dark_file_objs: files_to_delete_paths.extend([f.name for f in dark_file_objs if f and f.name])
+        if flat_file_objs_all: files_to_delete_paths.extend([f.name for f in flat_file_objs_all if f and f.name])
+        
+        deleted_count = 0
+        failed_to_delete_count = 0
+        for f_path in set(files_to_delete_paths): # 중복 제거
+            try:
+                if os.path.exists(f_path):
+                    os.remove(f_path)
+                    logger_ui.info(f"임시 업로드 파일 삭제 성공: {f_path}")
+                    deleted_count += 1
+                else:
+                    logger_ui.warning(f"임시 업로드 파일 경로를 찾을 수 없음: {f_path}")
+            except Exception as e_del:
+                logger_ui.error(f"임시 업로드 파일 삭제 실패 {f_path}: {e_del}")
+                failed_to_delete_count += 1
+        status_messages.append(f"임시 업로드 파일 삭제 완료: 성공 {deleted_count}개, 실패 {failed_to_delete_count}개.")
+    elif (bias_file_objs or dark_file_objs or flat_file_objs_all): # 파일이 있었으나 생성 실패한 경우
+        status_messages.append("일부 마스터 프레임 생성 실패로 업로드된 원본 임시 파일을 삭제하지 않습니다.")
+
     final_status = "\n".join(status_messages)
     logger_ui.info("Tab 1: Master frame generation finished.")
-    return ui_bias_path, ui_dark_output_msg, ui_flat_b_output_msg, ui_flat_v_output_msg, ui_flat_generic_output_msg, \
+    
+    # UI 컴포넌트에 맞게 반환값 수정
+    # ui_flat_b_output_msg 등은 이제 Files 컴포넌트로 대체되므로, 해당 메시지 변수는 반환 안 함
+    return ui_bias_path_out, ui_darks_paths_out, ui_flats_paths_out, \
            state_bias_path_out, state_darks_corrected_dict_out, state_prelim_flats_dict_out, \
            final_status
 
@@ -166,11 +206,17 @@ def handle_tab2_light_frame_calibration(
     state_mb_p, state_md_dict_corr, state_prelim_mf_dict, 
     preview_stretch_type, preview_asinh_a,
     temp_dir):
+    """
+    탭 2: LIGHT 프레임 보정 핸들러.
+    ccdproc를 사용하여 BIAS, DARK, FLAT 보정을 수행합니다.
+    FLAT은 예비 플랫을 로드 후, LIGHT 프레임의 노출시간에 맞는 DARK로 실시간 보정하여 사용합니다.
+    """
     status_messages = []
     calibrated_light_file_paths_for_ui = []
     output_preview_pil_image = None 
     current_timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
 
+    # 1. 최종 사용할 Master BIAS 결정 (CCDData 객체로)
     final_mb_ccd = None 
     if tab2_uploaded_bias_obj and tab2_uploaded_bias_obj.name:
         mb_data_temp, mb_header_temp = load_single_fits_from_path(tab2_uploaded_bias_obj.name, "탭2 업로드 Master BIAS")
@@ -178,15 +224,18 @@ def handle_tab2_light_frame_calibration(
     elif state_mb_p and os.path.exists(state_mb_p):
         mb_data_temp, mb_header_temp = load_single_fits_from_path(state_mb_p, "탭1 Master BIAS")
         if mb_data_temp is not None: final_mb_ccd = CCDData(mb_data_temp, header=mb_header_temp, unit=u.adu)
-    if final_mb_ccd is None: status_messages.append("경고: BIAS 보정 생략됨.")
+    if final_mb_ccd is None: status_messages.append("경고: 사용 가능한 Master BIAS 없음. BIAS 보정 생략됨.")
+    else: status_messages.append(f"Master BIAS 사용 준비 완료 (소스: {'탭2 업로드' if tab2_uploaded_bias_obj and tab2_uploaded_bias_obj.name and final_mb_ccd else '탭1 상태' if final_mb_ccd else '사용 불가'}).")
 
+    # 2. 탭2에서 업로드된 Raw Dark들을 처리하여 딕셔너리 생성 (CCDData 객체로)
     tab2_processed_darks_ccd_dict = {} 
     if tab2_uploaded_dark_raw_files: 
+        status_messages.append(f"탭2 업로드된 DARK 파일 {len(tab2_uploaded_dark_raw_files)}개 처리 시작...")
         for dark_file_obj in tab2_uploaded_dark_raw_files:
             if dark_file_obj and dark_file_obj.name:
-                raw_md_data, raw_md_header = load_single_fits_from_path(dark_file_obj.name, f"탭2 업로드 Raw DARK")
+                raw_md_data, raw_md_header = load_single_fits_from_path(dark_file_obj.name, f"탭2 업로드 Raw DARK ({os.path.basename(dark_file_obj.name)})")
                 if raw_md_data is not None and raw_md_header is not None:
-                    exp_time = get_fits_keyword(raw_md_header, ['EXPTIME', 'EXPOSURE'], -1.0, float)
+                    exp_time = get_fits_keyword(raw_md_header, ['EXPTIME', 'EXPOSURE'], default_value=-1.0, data_type=float)
                     if exp_time > 0:
                         raw_dark_ccd = CCDData(raw_md_data, header=raw_md_header, unit=u.adu)
                         corrected_dark_ccd = raw_dark_ccd 
@@ -194,13 +243,16 @@ def handle_tab2_light_frame_calibration(
                             corrected_dark_ccd = ccdp.subtract_bias(raw_dark_ccd, final_mb_ccd)
                         if exp_time not in tab2_processed_darks_ccd_dict: 
                             tab2_processed_darks_ccd_dict[exp_time] = corrected_dark_ccd
+                            status_messages.append(f"탭2 업로드 DARK (Exp: {exp_time}s) 사용 준비 완료.")
+                    else: status_messages.append(f"경고: 탭2 DARK ({os.path.basename(dark_file_obj.name)}) 노출시간 정보 없음.")
+                else: status_messages.append(f"탭2 DARK ({os.path.basename(dark_file_obj.name)}) 로드 실패.")
     
-    tab2_uploaded_prelim_flats_dict = {} # 탭2에서 업로드된 플랫도 예비 플랫으로 간주
+    # 3. 탭2에서 업로드된 필터별 "예비" Flat 처리 (BIAS/DARK 보정 없이 로드만)
+    tab2_uploaded_prelim_flats_dict = {} 
     for filt_char, uploaded_mf_obj in [('B', tab2_uploaded_flat_b_obj), ('V', tab2_uploaded_flat_v_obj)]:
         if uploaded_mf_obj and uploaded_mf_obj.name:
             mf_data_raw, mf_header = load_single_fits_from_path(uploaded_mf_obj.name, f"탭2 업로드 (예비) FLAT {filt_char}")
             if mf_data_raw is not None:
-                # 탭2 업로드 플랫은 Raw로 간주하고, BIAS/DARK 보정은 LIGHT 프레임 처리 시 수행
                 tab2_uploaded_prelim_flats_dict[filt_char] = CCDData(mf_data_raw, header=mf_header, unit=u.adu)
                 status_messages.append(f"탭2 업로드 예비 Master FLAT {filt_char} 사용 준비 완료.")
             else: status_messages.append(f"탭2 업로드 Master FLAT {filt_char} 로드 실패.")
@@ -254,33 +306,58 @@ def handle_tab2_light_frame_calibration(
                 if final_mb_ccd is not None and flat_temp.shape == final_mb_ccd.shape:
                     flat_temp = ccdp.subtract_bias(flat_temp, final_mb_ccd)
                 
-                # LIGHT 프레임의 노출시간에 맞는 DARK를 예비 FLAT에서 <0xEC><0x8A><0xA5>니다.
                 if md_to_use_ccd is not None and flat_temp.shape == md_to_use_ccd.shape:
-                    flat_original_exptime = get_fits_keyword(prelim_flat_to_process_ccd.header, ['EXPTIME', 'EXPOSURE'], default_value=None, data_type=float)
-                    dark_for_flat_exptime = get_fits_keyword(md_to_use_ccd.header, ['EXPTIME', 'EXPOSURE'], default_value=None, data_type=float) # md_to_use_ccd의 실제 노출시간
+                    flat_original_exptime_val = get_fits_keyword(prelim_flat_to_process_ccd.header, ['EXPTIME', 'EXPOSURE'], default_value=None, data_type=float, quiet=True)
+                    flat_original_exptime_q = flat_original_exptime_val * u.s if flat_original_exptime_val is not None and flat_original_exptime_val > 0 else None
+
+                    dark_for_flat_exptime_val = get_fits_keyword(md_to_use_ccd.header, ['EXPTIME', 'EXPOSURE'], default_value=None, data_type=float, quiet=True) 
+                    dark_for_flat_exptime_q = dark_for_flat_exptime_val * u.s if dark_for_flat_exptime_val is not None and dark_for_flat_exptime_val > 0 else None
                     
-                    # scale=True를 사용하려면 dark_exposure와 data_exposure가 모두 유효해야 함
-                    # 여기서는 md_to_use_ccd가 LIGHT 프레임의 노출시간에 맞춰진 것이므로,
-                    # 플랫 자체의 노출시간과 다를 수 있음. ccdproc이 스케일링하도록 함.
-                    flat_temp = ccdp.subtract_dark(flat_temp, md_to_use_ccd, 
-                                                   dark_exposure=dark_for_flat_exptime*u.s if dark_for_flat_exptime is not None and dark_for_flat_exptime > 0 else None, 
-                                                   data_exposure=flat_original_exptime*u.s if flat_original_exptime is not None and flat_original_exptime > 0 else None, 
-                                                   scale=True) # 스케일링 허용
-                    status_messages.append(f"{light_filename}: 예비 플랫에 DARK (LIGHT 노출시간 기반) 적용됨.")
+                    if flat_original_exptime_val and dark_for_flat_exptime_val:
+                        flat_temp = ccdp.subtract_dark(flat_temp, md_to_use_ccd, 
+                                                       dark_exposure=dark_for_flat_exptime_q, 
+                                                       data_exposure=flat_original_exptime_q, 
+                                                       scale=True) 
+                        status_messages.append(f"{light_filename}: 예비 플랫에 DARK 적용됨 (Flat Exp: {flat_original_exptime_q}, Dark Exp: {dark_for_flat_exptime_q}, 스케일링 적용).")
+                    # 노출시간 정보가 하나라도 없거나, 둘 다 있지만 다른 경우 -> 스케일링 없이 시도 (만약 같으면 문제없음)
+                    # ccdproc은 exposure_time 인자 하나만 받거나, dark_exposure & data_exposure를 쌍으로 받음
+                    # scale=True이고, 노출시간이 다르면 스케일링을 시도함
+                    elif flat_original_exptime_val is not None and dark_for_flat_exptime_val is not None and np.isclose(flat_original_exptime_val, dark_for_flat_exptime_val):
+                         flat_temp = ccdp.subtract_dark(flat_temp, md_to_use_ccd, scale=False) # 노출시간 같으므로 스케일링 불필요
+                         status_messages.append(f"{light_filename}: 예비 플랫에 DARK 적용됨 (노출시간 일치, 스케일링 없음).")
+                    else: # 노출시간 정보가 하나라도 없으면, 일단 scale=True로 시도 (ccdproc이 헤더에서 읽으려 함)
+                         flat_temp = ccdp.subtract_dark(flat_temp, md_to_use_ccd, scale=True)
+                         status_messages.append(f"경고: {light_filename}: 예비 플랫의 DARK 보정 시 노출 시간 정보 부정확. ccdproc 스케일링 시도.")
                 else:
                     status_messages.append(f"경고: {light_filename}: 예비 플랫에 DARK 적용 못함 (DARK 없거나 크기 불일치).")
 
                 mean_val = np.nanmean(flat_temp.data)
                 if mean_val is not None and not np.isclose(mean_val, 0) and np.isfinite(mean_val):
-                    mf_to_use_ccd = flat_temp.divide(mean_val * flat_temp.unit)
+                    final_mf_for_light = flat_temp.divide(mean_val * flat_temp.unit)
                     status_messages.append(f"{light_filename}: 최종 Master FLAT 생성 및 정규화 완료.")
                 else:
-                    status_messages.append(f"경고: {light_filename}: 최종 Master FLAT 정규화 실패.")
-            if mf_to_use_ccd is None: status_messages.append(f"경고: {light_filename} ({current_light_filter})에 맞는 Master FLAT 없음.")
+                    final_mf_for_light = flat_temp # 정규화 실패시 보정된 (BIAS, DARK 빠진) 플랫이라도 사용
+                    status_messages.append(f"경고: {light_filename}: 최종 Master FLAT 정규화 실패. 정규화 안된 플랫 사용.")
+            if final_mf_for_light is None: status_messages.append(f"경고: {light_filename} ({current_light_filter})에 맞는 Master FLAT 없음. FLAT 보정 생략.")
+            else: flat_source_msg = f"최종 생성된 Flat ({current_light_filter})" 
             
-            calibrated_light_ccd = ccdp.ccd_process(light_ccd_raw, master_bias=final_mb_ccd, dark_frame=md_to_use_ccd, master_flat=mf_to_use_ccd, dark_scale=False, error=False)
+            # LIGHT 프레임 최종 보정 시 ccd_process 호출
+            light_exp_quantity = current_light_exptime * u.s if current_light_exptime > 0 else None
+            dark_exp_quantity_for_light = get_fits_keyword(md_to_use_ccd.header, ['EXPTIME', 'EXPOSURE'], default_value=None, data_type=float) if md_to_use_ccd and md_to_use_ccd.header else None
+            dark_exp_quantity_for_light = dark_exp_quantity_for_light * u.s if dark_exp_quantity_for_light is not None and dark_exp_quantity_for_light > 0 else None
+            
+            calibrated_light_ccd = ccdp.ccd_process(
+                light_ccd_raw, 
+                master_bias=final_mb_ccd, 
+                dark_frame=md_to_use_ccd, 
+                master_flat=final_mf_for_light, 
+                data_exposure=light_exp_quantity, 
+                dark_exposure=dark_exp_quantity_for_light,
+                dark_scale=True, 
+                error=False
+            )
             if first_calibrated_image_data_for_preview is None: first_calibrated_image_data_for_preview = calibrated_light_ccd.data 
-            calibrated_light_ccd.header['HISTORY'] = f'Calibrated App v0.17 (B:{final_mb_ccd is not None},D:{dark_source_msg!="미사용"},F:{flat_source_msg!="미사용"})'
+            calibrated_light_ccd.header['HISTORY'] = f'Calibrated App v0.17.2 (B:{final_mb_ccd is not None},D:{dark_source_msg!="미사용"},F:{flat_source_msg!="미사용"})'
             saved_path = save_fits_image(calibrated_light_ccd, calibrated_light_ccd.header, f"calibrated_{os.path.splitext(light_filename)[0]}", temp_dir, current_timestamp_str)
             if saved_path: calibrated_light_file_paths_for_ui.append(saved_path); status_messages.append(f"{light_filename}: 보정 완료: {os.path.basename(saved_path)}")
             else: status_messages.append(f"{light_filename}: 저장 실패.")
@@ -296,16 +373,27 @@ def handle_tab2_light_frame_calibration(
 
 def handle_tab3_extinction_analysis(
     light_file_objs, 
-    uploaded_mb_path_obj, uploaded_md_raw_path_obj,
-    uploaded_mf_b_raw_path_obj, uploaded_mf_v_raw_path_obj,
-    state_mb_p, state_md_dict_corr, state_prelim_mf_dict, 
+    uploaded_mb_path_obj, 
+    uploaded_md_raw_files_objs, # 파라미터명 및 타입 변경
+    uploaded_mf_b_raw_path_obj, 
+    uploaded_mf_v_raw_path_obj,
+    state_mb_p, 
+    state_md_dict_corr, 
+    state_prelim_mf_dict, 
     star_detection_thresh_factor,
     temp_dir):
+    """
+    탭 3: 대기소광계수 분석 핸들러.
+    LIGHT 프레임들을 보정하고, 가장 밝은 별의 기기등급과 대기질량을 계산하여
+    필터별로 대기소광계수(k)와 영점(m0)을 추정합니다.
+    탭 2의 보정 로직과 유사하게 마스터 프레임을 처리합니다.
+    """
     status_log = []
     all_frame_results_for_df = [] 
     plot_image_fig = None 
     summary_text = "분석 결과가 없습니다."
-    
+    fwhm_for_dao_tab3 = 3.0 
+
     # 1. Master BIAS 결정 (CCDData 객체로)
     final_mb_ccd = None
     if uploaded_mb_path_obj and uploaded_mb_path_obj.name:
@@ -317,28 +405,35 @@ def handle_tab3_extinction_analysis(
     status_log.append(f"Master BIAS: {'사용' if final_mb_ccd is not None else '미사용/로드실패'}")
     if final_mb_ccd is None: status_log.append("경고: BIAS 보정 생략됨.")
 
-    # 2. 업로드된 Raw Dark 처리 (단일 파일, 해당 노출시간으로 간주)
-    tab3_uploaded_dark_ccd_corrected = None
-    tab3_uploaded_dark_exp_time = -1.0 
-    if uploaded_md_raw_path_obj and uploaded_md_raw_path_obj.name:
-        raw_md_data, raw_md_header = load_single_fits_from_path(uploaded_md_raw_path_obj.name, "탭3 업로드 Raw Master DARK")
-        if raw_md_data is not None and raw_md_header is not None:
-            tab3_uploaded_dark_exp_time = get_fits_keyword(raw_md_header, ['EXPTIME', 'EXPOSURE'], -1.0, float)
-            raw_dark_ccd = CCDData(raw_md_data, header=raw_md_header, unit=u.adu)
-            if final_mb_ccd is not None and raw_dark_ccd.shape == final_mb_ccd.shape:
-                tab3_uploaded_dark_ccd_corrected = ccdp.subtract_bias(raw_dark_ccd, final_mb_ccd)
-            else: tab3_uploaded_dark_ccd_corrected = raw_dark_ccd 
-            status_log.append(f"탭3 업로드 Raw DARK (Exp: {tab3_uploaded_dark_exp_time if tab3_uploaded_dark_exp_time > 0 else '모름'}) 처리 완료.")
-        else: status_log.append("탭3 업로드 Raw Master DARK 로드 실패.")
+    # 2. 탭3에서 업로드된 Raw Dark들을 처리하여 딕셔너리 생성 (CCDData 객체로)
+    tab3_processed_darks_ccd_dict = {} 
+    if uploaded_md_raw_files_objs: 
+        status_log.append(f"탭3 업로드된 DARK 파일 {len(uploaded_md_raw_files_objs)}개 처리 시작...")
+        for dark_file_obj in uploaded_md_raw_files_objs:
+            if dark_file_obj and dark_file_obj.name:
+                raw_md_data, raw_md_header = load_single_fits_from_path(dark_file_obj.name, f"탭3 업로드 Raw DARK ({os.path.basename(dark_file_obj.name)})")
+                if raw_md_data is not None and raw_md_header is not None:
+                    exp_time = get_fits_keyword(raw_md_header, ['EXPTIME', 'EXPOSURE'], default_value=-1.0, data_type=float)
+                    if exp_time > 0:
+                        raw_dark_ccd = CCDData(raw_md_data, header=raw_md_header, unit=u.adu)
+                        corrected_dark_ccd = raw_dark_ccd 
+                        if final_mb_ccd is not None and raw_dark_ccd.shape == final_mb_ccd.shape:
+                            corrected_dark_ccd = ccdp.subtract_bias(raw_dark_ccd, final_mb_ccd)
+                        if exp_time not in tab3_processed_darks_ccd_dict: 
+                            tab3_processed_darks_ccd_dict[exp_time] = corrected_dark_ccd
+                            status_log.append(f"탭3 업로드 DARK (Exp: {exp_time}s) 사용 준비 완료.")
+                        else:
+                            status_log.append(f"경고: 탭3에 동일 노출시간({exp_time}s)의 DARK가 여러 개 업로드됨. 첫 번째 파일만 사용.")
+                    else: status_log.append(f"경고: 탭3 DARK ({os.path.basename(dark_file_obj.name)}) 노출시간 정보 없음.")
+                else: status_log.append(f"탭3 DARK ({os.path.basename(dark_file_obj.name)}) 로드 실패.")
     
-    # 3. 업로드된 필터별 Raw Flat 처리 (예비 플랫으로 간주)
-    tab3_uploaded_prelim_flats_ccd_dict = {} 
-    for filt_char, uploaded_mf_raw_obj in [('B', uploaded_mf_b_raw_path_obj), ('V', uploaded_mf_v_raw_path_obj)]:
-        if uploaded_mf_raw_obj and uploaded_mf_raw_obj.name:
-            mf_data_raw, mf_header = load_single_fits_from_path(uploaded_mf_raw_obj.name, f"탭3 업로드 Raw Master FLAT {filt_char}")
-            if mf_data_raw is not None and mf_header is not None:
-                # 예비 플랫이므로 BIAS/DARK 보정은 LIGHT 처리 시 수행
-                tab3_uploaded_prelim_flats_ccd_dict[filt_char] = CCDData(mf_data_raw, header=mf_header, unit=u.adu)
+    # 3. 탭3에서 업로드된 필터별 "예비" Flat 처리 (BIAS/DARK 보정 없이 로드만)
+    tab3_uploaded_prelim_flats_dict = {} 
+    for filt_char, uploaded_mf_obj in [('B', uploaded_mf_b_raw_path_obj), ('V', uploaded_mf_v_raw_path_obj)]:
+        if uploaded_mf_obj and uploaded_mf_obj.name:
+            mf_data_raw, mf_header = load_single_fits_from_path(uploaded_mf_obj.name, f"탭3 업로드 (예비) FLAT {filt_char}")
+            if mf_data_raw is not None:
+                tab3_uploaded_prelim_flats_dict[filt_char] = CCDData(mf_data_raw, header=mf_header, unit=u.adu)
                 status_log.append(f"탭3 업로드 예비 Master FLAT {filt_char} 사용 준비 완료.")
             else: status_log.append(f"탭3 업로드 Master FLAT {filt_char} 로드 실패.")
 
@@ -364,17 +459,22 @@ def handle_tab3_extinction_analysis(
             current_exptime = get_fits_keyword(light_header, ['EXPTIME', 'EXPOSURE'], -1.0, float)
             current_result['filter'] = current_filter
 
+            # DARK 결정 (LIGHT 프레임용)
             md_to_use_ccd = None; dark_source_msg = "미사용"
             if current_exptime > 0:
-                if tab3_uploaded_dark_ccd_corrected is not None and (tab3_uploaded_dark_exp_time == current_exptime or tab3_uploaded_dark_exp_time == -1.0):
-                    md_to_use_ccd = tab3_uploaded_dark_ccd_corrected; dark_source_msg = f"탭3 업로드 Dark (Exp {tab3_uploaded_dark_exp_time if tab3_uploaded_dark_exp_time > 0 else '모름'})"
-                elif state_md_dict_corr and current_exptime in state_md_dict_corr:
+                if current_exptime in tab3_processed_darks_ccd_dict: 
+                    md_to_use_ccd = tab3_processed_darks_ccd_dict[current_exptime]; dark_source_msg = f"탭3 업로드 Dark (Exp {current_exptime}s)"
+                elif state_md_dict_corr and current_exptime in state_md_dict_corr: 
                     dark_path = state_md_dict_corr[current_exptime]
-                    if dark_path and os.path.exists(dark_path): d_data, d_hdr = load_single_fits_from_path(dark_path, f"탭1 Dark {current_exptime}s"); md_to_use_ccd = CCDData(d_data, header=d_hdr, unit=u.adu) if d_data is not None else None; dark_source_msg = f"탭1 Dark ({os.path.basename(dark_path)})"
-            if md_to_use_ccd is None: status_log.append(f"경고: {light_filename} (Exp: {current_exptime}s)에 맞는 Master DARK 없음.")
+                    if dark_path and os.path.exists(dark_path): 
+                        d_data, d_hdr = load_single_fits_from_path(dark_path, f"탭1 Dark {current_exptime}s")
+                        if d_data is not None: md_to_use_ccd = CCDData(d_data, header=d_hdr, unit=u.adu)
+                        dark_source_msg = f"탭1 Dark ({os.path.basename(dark_path)})"
+            if md_to_use_ccd is None: status_log.append(f"경고: {light_filename} (Exp: {current_exptime}s)에 맞는 Master DARK 없음. DARK 보정 생략.")
             
-            mf_to_use_ccd = None; flat_source_msg = "미사용"
-            prelim_flat_to_process_ccd = tab3_uploaded_prelim_flats_ccd_dict.get(current_filter)
+            # 최종 FLAT 결정 (예비 플랫에서 실시간 보정)
+            final_mf_for_light = None; flat_source_msg = "미사용"
+            prelim_flat_to_process_ccd = tab3_uploaded_prelim_flats_dict.get(current_filter)
             if prelim_flat_to_process_ccd is None and state_prelim_mf_dict:
                 prelim_flat_path = state_prelim_mf_dict.get(current_filter)
                 if not prelim_flat_path: prelim_flat_path = state_prelim_mf_dict.get('Generic')
@@ -385,30 +485,83 @@ def handle_tab3_extinction_analysis(
             elif prelim_flat_to_process_ccd is not None:
                 flat_source_msg = f"탭3 업로드 예비 Flat ({current_filter})"
 
-
             if prelim_flat_to_process_ccd is not None:
+                status_log.append(f"{light_filename}: 예비 플랫 ({flat_source_msg})으로 최종 플랫 생성 시도.")
                 flat_temp = prelim_flat_to_process_ccd.copy()
-                if final_mb_ccd is not None and flat_temp.shape == final_mb_ccd.shape: flat_temp = ccdp.subtract_bias(flat_temp, final_mb_ccd)
+                if final_mb_ccd is not None and flat_temp.shape == final_mb_ccd.shape:
+                    flat_temp = ccdp.subtract_bias(flat_temp, final_mb_ccd)
                 
-                # LIGHT 프레임의 노출시간에 맞는 DARK를 예비 FLAT에서 <0xEC><0x8A><0xA5>니다.
                 if md_to_use_ccd is not None and flat_temp.shape == md_to_use_ccd.shape:
-                    flat_original_exptime = get_fits_keyword(prelim_flat_to_process_ccd.header, ['EXPTIME', 'EXPOSURE'], default_value=None, data_type=float)
-                    dark_for_flat_exptime = get_fits_keyword(md_to_use_ccd.header, ['EXPTIME', 'EXPOSURE'], default_value=None, data_type=float)
-                    flat_temp = ccdp.subtract_dark(flat_temp, md_to_use_ccd, 
-                                                   dark_exposure=dark_for_flat_exptime*u.s if dark_for_flat_exptime is not None and dark_for_flat_exptime > 0 else None, 
-                                                   data_exposure=flat_original_exptime*u.s if flat_original_exptime is not None and flat_original_exptime > 0 else None, 
-                                                   scale=True)
-                
-                mean_val = np.nanmean(flat_temp.data)
-                if mean_val is not None and not np.isclose(mean_val, 0) and np.isfinite(mean_val): mf_to_use_ccd = flat_temp.divide(mean_val * flat_temp.unit)
-                else: status_log.append(f"경고: {light_filename} ({current_filter}) 최종 플랫 정규화 실패.")
-            if mf_to_use_ccd is None: status_log.append(f"경고: {light_filename} ({current_filter})에 맞는 Master FLAT 없음.")
+                    flat_original_exptime_val = get_fits_keyword(prelim_flat_to_process_ccd.header, ['EXPTIME', 'EXPOSURE'], default_value=None, data_type=float, quiet=True)
+                    flat_original_exptime_q = flat_original_exptime_val * u.s if flat_original_exptime_val is not None and flat_original_exptime_val > 0 else None
 
-            calibrated_ccd = ccdp.ccd_process(light_ccd_raw, master_bias=final_mb_ccd, dark_frame=md_to_use_ccd, master_flat=mf_to_use_ccd, dark_scale=False, error=False)
+                    dark_for_flat_exptime_val = get_fits_keyword(md_to_use_ccd.header, ['EXPTIME', 'EXPOSURE'], default_value=None, data_type=float, quiet=True) 
+                    dark_for_flat_exptime_q = dark_for_flat_exptime_val * u.s if dark_for_flat_exptime_val is not None and dark_for_flat_exptime_val > 0 else None
+                    
+                    if (flat_original_exptime_q is not None and flat_original_exptime_q.value > 0) and \
+                       (dark_for_flat_exptime_q is not None and dark_for_flat_exptime_q.value > 0):
+                        flat_temp = ccdp.subtract_dark(flat_temp, md_to_use_ccd, 
+                                                       dark_exposure=dark_for_flat_exptime_q, 
+                                                       data_exposure=flat_original_exptime_q, 
+                                                       scale=True) 
+                        status_log.append(f"{light_filename}: 예비 플랫에 DARK (스케일링 적용) 적용됨. Flat Exp: {flat_original_exptime_q}, Dark Exp: {dark_for_flat_exptime_q}")
+                    elif flat_original_exptime_val is not None and dark_for_flat_exptime_val is not None and np.isclose(flat_original_exptime_val, dark_for_flat_exptime_val):
+                         # 노출 시간이 정확히 같으면 스케일링 없이 빼기
+                         flat_temp = ccdp.subtract_dark(flat_temp, md_to_use_ccd, scale=False)
+                         status_log.append(f"{light_filename}: 예비 플랫에 DARK (노출시간 일치, 스케일링 없음) 적용됨.")
+                    else:
+                         status_log.append(f"경고: {light_filename}: 예비 플랫의 DARK 보정 시 노출 시간 정보 부족/불일치로 정확한 스케일링 불가. DARK 보정 생략 가능성 있음. Flat Exp: {flat_original_exptime_q}, Dark Exp: {dark_for_flat_exptime_q}")
+                else:
+                    status_log.append(f"경고: {light_filename}: 예비 플랫에 DARK 적용 못함 (DARK 없거나 크기 불일치).")
+
+                mean_val = np.nanmean(flat_temp.data)
+                if mean_val is not None and not np.isclose(mean_val, 0) and np.isfinite(mean_val):
+                    final_mf_for_light = flat_temp.divide(mean_val * flat_temp.unit)
+                    status_log.append(f"{light_filename}: 최종 Master FLAT 생성 및 정규화 완료.")
+                else:
+                    final_mf_for_light = flat_temp 
+                    status_log.append(f"경고: {light_filename}: 최종 Master FLAT 정규화 실패.")
+            if final_mf_for_light is None: status_log.append(f"경고: {light_filename} ({current_filter})에 맞는 Master FLAT 없음.")
             
-            stars = detect_stars_extinction(calibrated_ccd.data, star_detection_thresh_factor)
-            brightest = find_brightest_star_extinction(stars)
-            if brightest is None: raise ValueError("가장 밝은 별 탐지 실패")
+            light_exp_quantity = current_exptime * u.s if current_exptime is not None and current_exptime > 0 else None
+            dark_exp_quantity_for_light = None
+            if md_to_use_ccd and md_to_use_ccd.header:
+                dark_exp_val = get_fits_keyword(md_to_use_ccd.header, ['EXPTIME', 'EXPOSURE'], default_value=None, data_type=float, quiet=True)
+                if dark_exp_val is not None and dark_exp_val > 0:
+                    dark_exp_quantity_for_light = dark_exp_val * u.s
+            
+            flat_exp_quantity_for_light = None
+            if final_mf_for_light and final_mf_for_light.header:
+                 flat_exp_val = get_fits_keyword(final_mf_for_light.header, ['EXPTIME', 'EXPOSURE'], default_value=None, data_type=float, quiet=True)
+                 if flat_exp_val is not None and flat_exp_val > 0:
+                     flat_exp_quantity_for_light = flat_exp_val * u.s
+
+
+            calibrated_ccd = ccdp.ccd_process(
+                light_ccd_raw, 
+                master_bias=final_mb_ccd, 
+                dark_frame=md_to_use_ccd, 
+                master_flat=final_mf_for_light, 
+                data_exposure=light_exp_quantity, 
+                dark_exposure=dark_exp_quantity_for_light,
+                # flat_exposure 인자는 master_flat이 이미 최종 보정된 상태라면 ccd_process에서 덜 중요할 수 있음
+                # 하지만 명시적으로 전달하는 것이 혼란을 줄일 수 있음.
+                # flat_exposure=flat_exp_quantity_for_light, 
+                dark_scale=True, # True로 두어 유연성 확보
+                error=False
+            )
+            
+            # 수정된 별 탐지 함수 호출
+            sources_table = detect_stars_extinction(
+                calibrated_ccd.data, 
+                fwhm_dao=fwhm_for_dao_tab3, 
+                threshold_nsigma_dao=float(star_detection_thresh_factor) # UI 값을 nsigma로 사용
+            )
+            
+            brightest = find_brightest_star_extinction(sources_table, fwhm_for_radius_approx=fwhm_for_dao_tab3) # fwhm 전달
+            if brightest is None: raise ValueError("가장 밝은 별 탐지 실패 (DAO)")
+            
+            # calculate_flux_extinction은 이제 brightest 딕셔너리에서 'radius'를 사용
             flux, ap_rad, _ = calculate_flux_extinction(calibrated_ccd.data, brightest)
             if flux is None: raise ValueError("Flux 계산 실패")
             current_result.update({'flux': flux, 'star_x': brightest['xcentroid'], 'star_y': brightest['ycentroid'], 'aperture_radius': ap_rad})
@@ -453,15 +606,17 @@ def handle_tab3_extinction_analysis(
             x_b_arr = np.array([r['airmass'] for r in results_b]); y_b_arr = np.array([r['instrumental_magnitude'] for r in results_b])
             ax.scatter(x_b_arr, y_b_arr, color='blue', label=f'B Data ({len(x_b_arr)})', alpha=0.7, edgecolor='k')
             if len(x_b_arr) > 0: 
-                x_fit_b = np.array([np.min(x_b_arr), np.max(x_b_arr)]); y_fit_b = model_b.predict(x_fit_b.reshape(-1,1))
-                ax.plot(x_fit_b, y_fit_b, color='dodgerblue', ls='--', label=f'B Fit (k={slope_b:.3f}, R²={r_sq_b:.3f})')
+                x_fit_b_plot = np.array([np.min(x_b_arr), np.max(x_b_arr)])
+                y_fit_b_plot = model_b.predict(x_fit_b_plot.reshape(-1,1))
+                ax.plot(x_fit_b_plot, y_fit_b_plot, color='dodgerblue', ls='--', label=f'B Fit (k={slope_b:.3f}, R²={r_sq_b:.3f})')
             plot_created = True
         if results_v and model_v:
             x_v_arr = np.array([r['airmass'] for r in results_v]); y_v_arr = np.array([r['instrumental_magnitude'] for r in results_v])
             ax.scatter(x_v_arr, y_v_arr, color='green', label=f'V Data ({len(x_v_arr)})', alpha=0.7, edgecolor='k')
             if len(x_v_arr) > 0:
-                x_fit_v = np.array([np.min(x_v_arr), np.max(x_v_arr)]); y_fit_v = model_v.predict(x_fit_v.reshape(-1,1))
-                ax.plot(x_fit_v, y_fit_v, color='forestgreen', ls='--', label=f'V Fit (k={slope_v:.3f}, R²={r_sq_v:.3f})')
+                x_fit_v_plot = np.array([np.min(x_v_arr), np.max(x_v_arr)])
+                y_fit_v_plot = model_v.predict(x_fit_v_plot.reshape(-1,1))
+                ax.plot(x_fit_v_plot, y_fit_v_plot, color='forestgreen', ls='--', label=f'V Fit (k={slope_v:.3f}, R²={r_sq_v:.3f})')
             plot_created = True
         if plot_created:
             ax.set_xlabel('Airmass (X)'); ax.set_ylabel('Instrumental Magnitude (m_inst)'); ax.set_title('Atmospheric Extinction (m_inst = m0 + kX)')
@@ -474,7 +629,46 @@ def handle_tab3_extinction_analysis(
         fig_err, ax_err = plt.subplots(); ax_err.text(0.5,0.5,f"Plotting error: {e_plot}",ha='center',va='center',color='red'); plot_image_fig = fig_err
         plt.close(plot_image_fig)
 
-    df_headers = ["File", "Filter", "Airmass", "Altitude", "Inst. Mag.", "Flux", "Star X", "Star Y", "Ap. Radius", "Error"]
+    # df_headers = ["File", "Filter", "Airmass", "Altitude", "Inst. Mag.", "Flux", "Star X", "Star Y", "Ap. Radius", "Error"]
+    # for r_item in processed_results_for_analysis:
+    #     all_frame_results_for_df.append([
+    #         r_item.get('file', 'N/A'), r_item.get('filter', 'N/A'),
+    #         f"{r_item.get('airmass'):.3f}" if r_item.get('airmass') is not None else 'N/A',
+    #         f"{r_item.get('altitude'):.2f}" if r_item.get('altitude') is not None else 'N/A',
+    #         f"{r_item.get('instrumental_magnitude'):.3f}" if r_item.get('instrumental_magnitude') is not None else 'N/A',
+    #         f"{r_item.get('flux'):.2e}" if r_item.get('flux') is not None else 'N/A',
+    #         f"{r_item.get('star_x'):.1f}" if r_item.get('star_x') is not None else 'N/A',
+    #         f"{r_item.get('star_y'):.1f}" if r_item.get('star_y') is not None else 'N/A',
+    #         f"{r_item.get('aperture_radius'):.1f}" if r_item.get('aperture_radius') is not None else 'N/A',
+    #         r_item.get('error_message', '')
+    #     ])
+    
+    # final_log = "\n".join(status_log)
+    # logger_ui.info("대기소광계수 분석 완료.")
+    # return plot_image_fig, summary_text, (df_headers, all_frame_results_for_df) if all_frame_results_for_df else (df_headers, [["결과 없음"]*len(df_headers)]), final_log
+
+# LIGHT 파일이 하나도 없을 때 ----------------------------------
+    if not light_file_objs:
+        status_log.append("분석할 LIGHT 프레임 없음.")
+        df_headers_no_light = [
+            "File","Filter","Airmass","Altitude",
+            "Inst. Mag.","Flux","Star X","Star Y","Ap. Radius","Error"
+        ]
+        # 🔸 수정: 바로 DataFrame으로 만들어 반환
+        df_empty = pd.DataFrame([["LIGHT 파일 없음"]*len(df_headers_no_light)],
+                                columns=df_headers_no_light)
+        return (
+            None,                           # plot
+            "LIGHT 파일 없음",              # summary
+            df_empty,                       # dataframe
+            "\n".join(status_log)           # log
+        )
+    ...
+    # 결과 표 준비 ---------------------------------------------------
+    df_headers = [
+        "File","Filter","Airmass","Altitude",
+        "Inst. Mag.","Flux","Star X","Star Y","Ap. Radius","Error"
+    ]
     for r_item in processed_results_for_analysis:
         all_frame_results_for_df.append([
             r_item.get('file', 'N/A'), r_item.get('filter', 'N/A'),
@@ -487,11 +681,23 @@ def handle_tab3_extinction_analysis(
             f"{r_item.get('aperture_radius'):.1f}" if r_item.get('aperture_radius') is not None else 'N/A',
             r_item.get('error_message', '')
         ])
-    
+
+    # 🔸 수정: list → DataFrame 변환
+    df_results = pd.DataFrame(
+        all_frame_results_for_df or [["결과 없음"]*len(df_headers)],
+        columns=df_headers
+    )
+
     final_log = "\n".join(status_log)
     logger_ui.info("대기소광계수 분석 완료.")
-    return plot_image_fig, summary_text, (df_headers, all_frame_results_for_df) if all_frame_results_for_df else (df_headers, [["결과 없음"]*len(df_headers)]), final_log
 
+    # 🔸 수정: Gradio의 DataFrame 컴포넌트가 바로 처리할 수 있는 형식(4-값)으로 반환
+    return (
+        plot_image_fig,   # gr.Plot
+        summary_text,     # gr.Textbox (요약)
+        df_results,       # gr.DataFrame
+        final_log         # gr.Textbox (로그)
+    )
 
 def handle_tab4_detailed_photometry(
     light_b_file_objs, light_v_file_objs,
@@ -500,12 +706,17 @@ def handle_tab4_detailed_photometry(
     tab4_uploaded_mb_obj, tab4_uploaded_md_raw_obj, 
     tab4_uploaded_mf_b_raw_obj, tab4_uploaded_mf_v_raw_obj,
     state_mb_p, state_md_dict_corr, 
-    state_prelim_mf_dict, # 예비 플랫 딕셔너리
+    state_prelim_mf_dict, 
     k_b_input, m0_b_input_user, k_v_input, m0_v_input_user, 
     dao_fwhm_input, dao_thresh_nsigma_input, phot_aperture_radius_input, 
     roi_x_min, roi_x_max, roi_y_min, roi_y_max,
     simbad_query_radius_arcsec, 
     temp_dir):
+    """
+    탭 4: 상세 측광 및 카탈로그 매칭 핸들러.
+    ccdproc를 사용하여 표준별 및 대상별 LIGHT 프레임을 보정하고,
+    측광, 표준 등급 계산, 카탈로그 매칭을 수행합니다.
+    """
     status_log = []
     all_stars_final_data_for_df = [] 
     csv_output_path = None
@@ -534,6 +745,7 @@ def handle_tab4_detailed_photometry(
         return (["Error Message"], [["입력 파라미터 오류"]]), None, None, "\n".join(status_log)
 
     # --- 2. 최종 사용할 마스터 프레임 결정 및 준비 (CCDData 객체로) ---
+    # BIAS
     final_mb_ccd = None
     if tab4_uploaded_mb_obj and tab4_uploaded_mb_obj.name:
         mb_data_temp, mb_hdr_temp = load_single_fits_from_path(tab4_uploaded_mb_obj.name, "탭4 업로드 BIAS")
@@ -544,6 +756,7 @@ def handle_tab4_detailed_photometry(
     status_log.append(f"Master BIAS: {'사용' if final_mb_ccd is not None else '미사용/로드실패'}")
     if final_mb_ccd is None: status_log.append("경고: BIAS 보정 생략됨.");
 
+    # DARK (탭4 업로드 Raw Dark 처리)
     tab4_uploaded_dark_ccd_corrected_dict = {} 
     if tab4_uploaded_md_raw_obj and tab4_uploaded_md_raw_obj.name: 
         raw_md_data, raw_md_header = load_single_fits_from_path(tab4_uploaded_md_raw_obj.name, "탭4 업로드 Raw Master DARK")
@@ -557,16 +770,15 @@ def handle_tab4_detailed_photometry(
             status_log.append(f"탭4 업로드 Raw DARK (Exp: {exp_time_md if exp_time_md > 0 else '모름'}) 처리 완료.")
         else: status_log.append("탭4 업로드 Raw Master DARK 로드 실패.")
     
-    # 탭4에서 업로드된 필터별 Raw Flat을 예비 플랫으로 처리
+    # FLAT (탭4 업로드 예비 Flat 처리)
     tab4_uploaded_prelim_flats_ccd_dict = {} 
-    for filt_char, uploaded_mf_raw_obj_tab4 in [('B', tab4_uploaded_mf_b_raw_obj), ('V', tab4_uploaded_mf_v_raw_obj)]:
+    for filt_char_up, uploaded_mf_raw_obj_tab4 in [('B', tab4_uploaded_mf_b_raw_obj), ('V', tab4_uploaded_mf_v_raw_obj)]:
         if uploaded_mf_raw_obj_tab4 and uploaded_mf_raw_obj_tab4.name:
-            mf_data_raw, mf_header = load_single_fits_from_path(uploaded_mf_raw_obj_tab4.name, f"탭4 업로드 Raw FLAT {filt_char}")
+            mf_data_raw, mf_header = load_single_fits_from_path(uploaded_mf_raw_obj_tab4.name, f"탭4 업로드 Raw FLAT {filt_char_up}")
             if mf_data_raw is not None and mf_header is not None:
-                # 예비 플랫이므로 BIAS/DARK 보정은 LIGHT 처리 시 수행
-                tab4_uploaded_prelim_flats_ccd_dict[filt_char] = CCDData(mf_data_raw, header=mf_header, unit=u.adu)
-                status_log.append(f"탭4 업로드 예비 Master FLAT {filt_char} 사용 준비 완료.")
-            else: status_log.append(f"탭4 업로드 Master FLAT {filt_char} 로드 실패.")
+                tab4_uploaded_prelim_flats_ccd_dict[filt_char_up] = CCDData(mf_data_raw, header=mf_header, unit=u.adu)
+                status_log.append(f"탭4 업로드 예비 Master FLAT {filt_char_up} 사용 준비 완료.")
+            else: status_log.append(f"탭4 업로드 Master FLAT {filt_char_up} 로드 실패.")
 
     if final_mb_ccd is None: 
         status_log.append("오류: Master BIAS를 사용할 수 없습니다. 처리를 중단합니다.")
@@ -574,7 +786,7 @@ def handle_tab4_detailed_photometry(
 
     # --- 3. 표준별 처리로 유효 영점(m0_eff) 계산 ---
     m0_eff_b, m0_eff_v = m0_b_user_val, m0_v_user_val 
-    status_log.append(f"초기 영점 설정: m0_B={m0_eff_b:.3f}, m0_V={m0_eff_v:.3f} (사용자 입력 또는 기본값)")
+    status_log.append(f"초기 영점: m0_B={m0_eff_b:.3f}, m0_V={m0_eff_v:.3f} (사용자 입력 또는 기본값)")
 
     for std_filt_char, std_file_obj, std_mag_known_in, k_coeff_std_val, m0_eff_var_name_str in [
         ('B', std_star_b_file_obj, std_b_mag_known_input, k_b, 'm0_eff_b'),
@@ -587,17 +799,19 @@ def handle_tab4_detailed_photometry(
                 std_ccd_raw = CCDData(std_data, header=std_header, unit=u.adu)
                 std_exp_time = get_fits_keyword(std_header, ['EXPTIME', 'EXPOSURE'], -1.0, float)
                 
+                # 표준별 보정용 DARK 결정
                 dark_for_std_ccd = tab4_uploaded_dark_ccd_corrected_dict.get(std_exp_time if std_exp_time > 0 else -1.0)
                 if dark_for_std_ccd is None and state_md_dict_corr:
                     dark_path_std = state_md_dict_corr.get(std_exp_time)
                     if not dark_path_std and std_exp_time > 0:
-                        available_exp_std_d = sorted([k for k in state_md_dict_corr.keys() if isinstance(k, (int, float)) and k > 0])
-                        if available_exp_std_d: closest_exp_std_d = min(available_exp_std_d, key=lambda e: abs(e-std_exp_time)); dark_path_std = state_md_dict_corr[closest_exp_std_d]
+                        available_exp_std_d = sorted([k_ for k_ in state_md_dict_corr.keys() if isinstance(k_, (int, float)) and k_ > 0])
+                        if available_exp_std_d: closest_exp_std_d = min(available_exp_std_d, key=lambda e_: abs(e_-std_exp_time)); dark_path_std = state_md_dict_corr[closest_exp_std_d]
                     if dark_path_std and os.path.exists(dark_path_std):
                         d_std_data, d_std_hdr = load_single_fits_from_path(dark_path_std, f"Dark for Std Star {std_filt_char}")
                         if d_std_data is not None: dark_for_std_ccd = CCDData(d_std_data, header=d_std_hdr, unit=u.adu)
 
-                flat_for_std_ccd = None
+                # 표준별 보정용 최종 FLAT 결정
+                final_flat_for_std = None
                 prelim_flat_std = tab4_uploaded_prelim_flats_ccd_dict.get(std_filt_char)
                 if prelim_flat_std is None and state_prelim_mf_dict:
                     prelim_flat_path_std = state_prelim_mf_dict.get(std_filt_char)
@@ -609,17 +823,41 @@ def handle_tab4_detailed_photometry(
                 if prelim_flat_std is not None:
                     flat_temp_std = prelim_flat_std.copy()
                     if final_mb_ccd is not None and flat_temp_std.shape == final_mb_ccd.shape: flat_temp_std = ccdp.subtract_bias(flat_temp_std, final_mb_ccd)
-                    if dark_for_std_ccd is not None and flat_temp_std.shape == dark_for_std_ccd.shape: # 표준별의 노출시간에 맞는 다크로 플랫 보정
-                         flat_original_exptime_std = get_fits_keyword(prelim_flat_std.header, ['EXPTIME', 'EXPOSURE'], default_value=None, data_type=float)
-                         dark_for_flat_exptime_std = get_fits_keyword(dark_for_std_ccd.header, ['EXPTIME', 'EXPOSURE'], default_value=None, data_type=float)
-                         flat_temp_std = ccdp.subtract_dark(flat_temp_std, dark_for_std_ccd, 
-                                                            dark_exposure=dark_for_flat_exptime_std*u.s if dark_for_flat_exptime_std is not None and dark_for_flat_exptime_std > 0 else None,
-                                                            data_exposure=flat_original_exptime_std*u.s if flat_original_exptime_std is not None and flat_original_exptime_std > 0 else None,
-                                                            scale=True)
+                    
+                    # 표준별의 예비 플랫을 보정할 때는 표준별의 노출시간에 맞는 DARK를 사용
+                    # (md_to_use_ccd가 아닌 dark_for_std_ccd 사용)
+                    if dark_for_std_ccd is not None and flat_temp_std.shape == dark_for_std_ccd.shape: 
+                         flat_original_exptime_std_val = get_fits_keyword(prelim_flat_std.header, ['EXPTIME', 'EXPOSURE'], default_value=None, data_type=float)
+                         flat_original_exptime_std_q = flat_original_exptime_std_val * u.s if flat_original_exptime_std_val is not None and flat_original_exptime_std_val > 0 else None
+                         
+                         dark_for_flat_exptime_std_val = get_fits_keyword(dark_for_std_ccd.header, ['EXPTIME', 'EXPOSURE'], default_value=None, data_type=float)
+                         dark_for_flat_exptime_std_q = dark_for_flat_exptime_std_val * u.s if dark_for_flat_exptime_std_val is not None and dark_for_flat_exptime_std_val > 0 else None
+                         
+                         if flat_original_exptime_std_q and dark_for_flat_exptime_std_q:
+                             flat_temp_std = ccdp.subtract_dark(flat_temp_std, dark_for_std_ccd, 
+                                                                dark_exposure=dark_for_flat_exptime_std_q,
+                                                                data_exposure=flat_original_exptime_std_q,
+                                                                scale=True)
+                         elif flat_original_exptime_std_val is not None and dark_for_flat_exptime_std_val is not None and np.isclose(flat_original_exptime_std_val, dark_for_flat_exptime_std_val):
+                              flat_temp_std = ccdp.subtract_dark(flat_temp_std, dark_for_std_ccd, scale=False)
+                         else:
+                             status_log.append(f"경고: 표준별({std_filt_char}) 예비 플랫의 DARK 보정 시 노출 시간 정보 부족/불일치로 스케일링 불가.")
+                    
                     mean_val_std = np.nanmean(flat_temp_std.data)
-                    if mean_val_std is not None and not np.isclose(mean_val_std, 0) and np.isfinite(mean_val_std): flat_for_std_ccd = flat_temp_std.divide(mean_val_std * flat_temp_std.unit)
+                    if mean_val_std is not None and not np.isclose(mean_val_std, 0) and np.isfinite(mean_val_std): 
+                        final_flat_for_std = flat_temp_std.divide(mean_val_std * flat_temp_std.unit)
                 
-                cal_std_ccd = ccdp.ccd_process(std_ccd_raw, master_bias=final_mb_ccd, dark_frame=dark_for_std_ccd, master_flat=flat_for_std_ccd, dark_scale=False, error=False)
+                # 표준별 보정
+                std_exp_quantity = std_exp_time * u.s if std_exp_time > 0 else None
+                dark_exp_quantity_for_std = get_fits_keyword(dark_for_std_ccd.header, ['EXPTIME', 'EXPOSURE'], default_value=None, data_type=float) if dark_for_std_ccd and dark_for_std_ccd.header else None
+                dark_exp_quantity_for_std = dark_exp_quantity_for_std * u.s if dark_exp_quantity_for_std is not None and dark_exp_quantity_for_std > 0 else None
+
+                cal_std_ccd = ccdp.ccd_process(std_ccd_raw, master_bias=final_mb_ccd, 
+                                               dark_frame=dark_for_std_ccd, 
+                                               master_flat=final_flat_for_std, 
+                                               data_exposure=std_exp_quantity,
+                                               dark_exposure=dark_exp_quantity_for_std,
+                                               dark_scale=True, error=False)
                 
                 std_stars_table = detect_stars_dao(cal_std_ccd.data, fwhm, thresh_nsigma)
                 if std_stars_table and len(std_stars_table) > 0:
@@ -634,22 +872,29 @@ def handle_tab4_detailed_photometry(
                             try: m_std_known_val = float(std_mag_known_in)
                             except: status_log.append(f"{std_filt_char} 표준 등급 입력값 유효X.")
                         
-                        if not np.isfinite(m_std_known_val):
+                        if not np.isfinite(m_std_known_val): # SIMBAD 조회는 등급 자동 추출에 한계
                             std_ra, std_dec = convert_pixel_to_wcs(std_phot_table['xcentroid'][0], std_phot_table['ycentroid'][0], std_header)
                             if np.isfinite(std_ra):
                                 simbad_id_std = query_simbad_for_object(std_ra, std_dec, 2.0)
-                                status_log.append(f"{std_filt_char} 표준별 SIMBAD: {simbad_id_std} (등급 자동 추출 미구현)")
+                                status_log.append(f"{std_filt_char} 표준별 SIMBAD: {simbad_id_std} (참고용, 등급 자동 추출 미지원)")
                         
                         if np.isfinite(m_std_known_val) and m_inst_std is not None and x_std is not None and k_coeff_std_val is not None:
                             calc_m0 = m_inst_std - k_coeff_std_val * x_std - m_std_known_val
                             if m0_eff_var_name_str == 'm0_eff_b': m0_eff_b = calc_m0
                             elif m0_eff_var_name_str == 'm0_eff_v': m0_eff_v = calc_m0
                             status_log.append(f"{std_filt_char}필터 영점(m0_eff) 계산됨: {calc_m0:.3f} (표준별 사용)")
-                        else: status_log.append(f"{std_filt_char}필터 표준별 정보 부족으로 영점 자동 계산 불가. 사용자 입력 m0 사용.")
+                        else: 
+                            status_log.append(f"{std_filt_char}필터 표준별 정보 부족으로 영점 자동 계산 불가. 사용자 입력 m0 사용.")
+                            if m0_eff_var_name_str == 'm0_eff_b': m0_eff_b = m0_b_user_val
+                            elif m0_eff_var_name_str == 'm0_eff_v': m0_eff_v = m0_v_user_val
                     else: status_log.append(f"{std_filt_char}필터 표준별 측광 실패.")
                 else: status_log.append(f"{std_filt_char}필터 표준별 이미지에서 별 탐지 실패.")
             else: status_log.append(f"{std_filt_char}필터 표준별 파일 로드 실패.")
-        else: status_log.append(f"{std_filt_char}필터 표준별 파일 미업로드. 사용자 입력 m0 사용.")
+        else: 
+            status_log.append(f"{std_filt_char}필터 표준별 파일 미업로드. 사용자 입력 m0 사용.")
+            if m0_eff_var_name_str == 'm0_eff_b': m0_eff_b = m0_b_user_val
+            elif m0_eff_var_name_str == 'm0_eff_v': m0_eff_v = m0_v_user_val
+
 
     # --- 4. 대상 LIGHT 프레임 처리 ---
     filter_processed_stars_data = {'B': [], 'V': []} 
@@ -682,11 +927,10 @@ def handle_tab4_detailed_photometry(
                         d_l_data, d_l_hdr = load_single_fits_from_path(dark_path_light, f"Dark for LIGHT {filename_loop}")
                         if d_l_data is not None: md_to_use_ccd_light = CCDData(d_l_data, header=d_l_hdr, unit=u.adu)
                 
-                # 최종 FLAT 결정 (예비 플랫에서 실시간 보정)
                 mf_to_use_ccd_light = None
                 flat_source_msg_light = "미사용"
-                prelim_flat_for_light_ccd = tab4_uploaded_prelim_flats_ccd_dict.get(filter_char_loop) # 탭4 업로드 예비 플랫
-                if prelim_flat_for_light_ccd is None and state_prelim_mf_dict: # 탭1 상태 예비 플랫
+                prelim_flat_for_light_ccd = tab4_uploaded_prelim_flats_ccd_dict.get(filter_char_loop) 
+                if prelim_flat_for_light_ccd is None and state_prelim_mf_dict: 
                     prelim_flat_path_light = state_prelim_mf_dict.get(filter_char_loop)
                     if not prelim_flat_path_light: prelim_flat_path_light = state_prelim_mf_dict.get('Generic')
                     if prelim_flat_path_light and os.path.exists(prelim_flat_path_light):
@@ -696,27 +940,38 @@ def handle_tab4_detailed_photometry(
                 elif prelim_flat_for_light_ccd is not None:
                      flat_source_msg_light = f"탭4 업로드 예비 Flat ({filter_char_loop})"
 
-
                 if prelim_flat_for_light_ccd is not None:
                     flat_temp_light = prelim_flat_for_light_ccd.copy()
                     if final_mb_ccd is not None and flat_temp_light.shape == final_mb_ccd.shape:
                         flat_temp_light = ccdp.subtract_bias(flat_temp_light, final_mb_ccd)
-                    
                     if md_to_use_ccd_light is not None and flat_temp_light.shape == md_to_use_ccd_light.shape:
-                        flat_original_exptime_light = get_fits_keyword(prelim_flat_for_light_ccd.header, ['EXPTIME', 'EXPOSURE'], default_value=None, data_type=float)
-                        dark_for_flat_exptime_light = get_fits_keyword(md_to_use_ccd_light.header, ['EXPTIME', 'EXPOSURE'], default_value=None, data_type=float)
-                        flat_temp_light = ccdp.subtract_dark(flat_temp_light, md_to_use_ccd_light, 
-                                                             dark_exposure=dark_for_flat_exptime_light*u.s if dark_for_flat_exptime_light is not None and dark_for_flat_exptime_light > 0 else None,
-                                                             data_exposure=flat_original_exptime_light*u.s if flat_original_exptime_light is not None and flat_original_exptime_light > 0 else None,
-                                                             scale=True)
+                        flat_original_exptime_light_val = get_fits_keyword(prelim_flat_for_light_ccd.header, ['EXPTIME', 'EXPOSURE'], default_value=None, data_type=float)
+                        flat_original_exptime_light_q = flat_original_exptime_light_val * u.s if flat_original_exptime_light_val is not None and flat_original_exptime_light_val > 0 else None
+                        dark_for_flat_exptime_light_val = get_fits_keyword(md_to_use_ccd_light.header, ['EXPTIME', 'EXPOSURE'], default_value=None, data_type=float)
+                        dark_for_flat_exptime_light_q = dark_for_flat_exptime_light_val * u.s if dark_for_flat_exptime_light_val is not None and dark_for_flat_exptime_light_val > 0 else None
+                        
+                        if flat_original_exptime_light_q and dark_for_flat_exptime_light_q:
+                            flat_temp_light = ccdp.subtract_dark(flat_temp_light, md_to_use_ccd_light, 
+                                                                 dark_exposure=dark_for_flat_exptime_light_q, 
+                                                                 data_exposure=flat_original_exptime_light_q, 
+                                                                 scale=True)
+                        elif flat_original_exptime_light_val is not None and dark_for_flat_exptime_light_val is not None and np.isclose(flat_original_exptime_light_val, dark_for_flat_exptime_light_val):
+                             flat_temp_light = ccdp.subtract_dark(flat_temp_light, md_to_use_ccd_light, scale=False)
+                        else:
+                             status_log.append(f"경고: {filename_loop} ({filter_char_loop}) 예비 플랫 DARK 보정 시 노출시간 정보 부족/불일치로 스케일링 불가/생략.")
                     
                     mean_val_light = np.nanmean(flat_temp_light.data)
                     if mean_val_light is not None and not np.isclose(mean_val_light, 0) and np.isfinite(mean_val_light):
                         mf_to_use_ccd_light = flat_temp_light.divide(mean_val_light * flat_temp_light.unit)
                 if mf_to_use_ccd_light is None: status_log.append(f"경고: {filename_loop} ({filter_char_loop})에 맞는 최종 Master FLAT 생성 실패.")
 
-
-                calibrated_ccd = ccdp.ccd_process(light_ccd_raw, master_bias=final_mb_ccd, dark_frame=md_to_use_ccd_light, master_flat=mf_to_use_ccd_light, dark_scale=False, error=False)
+                light_exp_quantity = current_light_exptime * u.s if current_light_exptime > 0 else None
+                dark_exp_quantity_for_light = get_fits_keyword(md_to_use_ccd_light.header, ['EXPTIME', 'EXPOSURE'], default_value=None, data_type=float) if md_to_use_ccd_light and md_to_use_ccd_light.header else None
+                dark_exp_quantity_for_light = dark_exp_quantity_for_light * u.s if dark_exp_quantity_for_light is not None and dark_exp_quantity_for_light > 0 else None
+                
+                calibrated_ccd = ccdp.ccd_process(light_ccd_raw, master_bias=final_mb_ccd, dark_frame=md_to_use_ccd_light, master_flat=mf_to_use_ccd_light, 
+                                                  data_exposure=light_exp_quantity, dark_exposure=dark_exp_quantity_for_light,
+                                                  dark_scale=True, error=False)
                 
                 if i_light == 0: 
                     if filter_char_loop == 'B': first_light_b_calibrated_ccd_data_for_preview = calibrated_ccd.data
@@ -1028,4 +1283,3 @@ def handle_tab5_plot_hr_diagram(csv_file_obj, temp_dir):
         plt.close(fig)
         
     return hr_plot_image, "\n".join(status_log)
-
