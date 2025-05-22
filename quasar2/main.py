@@ -201,26 +201,31 @@ with gr.Blocks(title="천체사진 처리 도구 v0.17.2 (탭1 다운로드 및 
         # --- 탭 4 정의 (입력 상태 변수명 변경) ---
         with gr.TabItem("4. 상세 측광 및 카탈로그 분석"):
             gr.Markdown("## 상세 측광, 표준등급 계산 및 카탈로그 매칭")
+            gr.Markdown(
+                "**이미 보정된** B 및 V 필터 LIGHT 프레임과 표준별 FITS 파일을 업로드하여 상세 측광을 수행합니다.\n"
+                "FITS 헤더에 WCS 정보가 필요하며, 이를 바탕으로 SIMBAD 카탈로그 정보를 조회합니다."
+            )
             with gr.Row():
                 with gr.Column(scale=2): 
-                    gr.Markdown("#### 1. LIGHT 프레임 업로드 (필터별)")
-                    tab4_light_b_input = gr.File(label="B 필터 LIGHT 프레임(들)", file_count="multiple", type="filepath", file_types=[".fits", ".fit"])
-                    tab4_light_v_input = gr.File(label="V 필터 LIGHT 프레임(들)", file_count="multiple", type="filepath", file_types=[".fits", ".fit"])
+                    gr.Markdown("#### 1. 보정된 LIGHT 프레임 업로드 (필터별)")
+                    tab4_light_b_input = gr.File(label="보정된 B 필터 LIGHT 프레임(들)", file_count="multiple", type="filepath", file_types=[".fits", ".fit"])
+                    tab4_light_v_input = gr.File(label="보정된 V 필터 LIGHT 프레임(들)", file_count="multiple", type="filepath", file_types=[".fits", ".fit"])
                     
-                    gr.Markdown("#### 1a. 표준별 FITS 파일 업로드 (선택 사항)")
-                    tab4_std_star_b_file_input = gr.File(label="B필터 표준별 FITS 파일 (1개)", file_count="single", type="filepath")
-                    tab4_std_star_v_file_input = gr.File(label="V필터 표준별 FITS 파일 (1개)", file_count="single", type="filepath")
+                    gr.Markdown("#### 1a. 보정된 표준별 FITS 파일 업로드 (선택 사항)")
+                    tab4_std_star_b_file_input = gr.File(label="보정된 B필터 표준별 FITS 파일 (1개)", file_count="single", type="filepath")
+                    tab4_std_star_v_file_input = gr.File(label="보정된 V필터 표준별 FITS 파일 (1개)", file_count="single", type="filepath")
 
                     gr.Markdown("#### 1b. 표준별 정보 입력 (선택 사항, 미입력 시 SIMBAD 조회 시도)")
                     with gr.Row():
                         tab4_std_b_mag_known_input = gr.Number(label="B필터 표준별의 알려진 B등급", interactive=True, info="예: 12.34")
                         tab4_std_v_mag_known_input = gr.Number(label="V필터 표준별의 알려진 V등급", interactive=True, info="예: 11.87")
 
-                    with gr.Accordion("마스터 프레임 직접 업로드 (선택 사항, Raw 권장)", open=False):
-                        tab4_uploaded_mb_obj = gr.File(label="Master BIAS (Raw 또는 Corrected)", file_count="single", type="filepath")
-                        tab4_uploaded_md_raw_obj = gr.File(label="Master DARK (Raw, Bias 미차감, 노출시간은 헤더 참조)", file_count="single", type="filepath") # 단일 업로드 유지
-                        tab4_uploaded_mf_b_raw_obj = gr.File(label="Master FLAT B (Raw, 예비 플랫으로 사용)", file_count="single", type="filepath") # 설명 변경
-                        tab4_uploaded_mf_v_raw_obj = gr.File(label="Master FLAT V (Raw, 예비 플랫으로 사용)", file_count="single", type="filepath") # 설명 변경
+                    # 마스터 프레임 직접 업로드 Accordion 제거
+                    # with gr.Accordion("마스터 프레임 직접 업로드 (선택 사항, Raw 권장)", open=False):
+                    #     tab4_uploaded_mb_obj = gr.File(label="Master BIAS (Raw 또는 Corrected)", file_count="single", type="filepath")
+                    #     tab4_uploaded_md_raw_obj = gr.File(label="Master DARK (Raw, Bias 미차감, 노출시간은 헤더 참조)", file_count="single", type="filepath")
+                    #     tab4_uploaded_mf_b_raw_obj = gr.File(label="Master FLAT B (Raw, Bias/Dark 미차감)", file_count="single", type="filepath")
+                    #     tab4_uploaded_mf_v_raw_obj = gr.File(label="Master FLAT V (Raw, Bias/Dark 미차감)", file_count="single", type="filepath")
 
                     gr.Markdown("#### 2. 대기소광 및 기본 영점 파라미터 입력 (필수)")
                     with gr.Row():
@@ -244,6 +249,7 @@ with gr.Blocks(title="천체사진 처리 도구 v0.17.2 (탭1 다운로드 및 
                     gr.Markdown("#### 5. 카탈로그 검색 파라미터")
                     tab4_simbad_radius_input = gr.Slider(minimum=1.0, maximum=30.0, value=5.0, step=1.0, label="SIMBAD 검색 반경 (arcsec)", interactive=True)
                     tab4_process_button = gr.Button("상세 측광 분석 시작", variant="primary")
+
 
                 with gr.Column(scale=3): 
                     gr.Markdown("#### ROI 시각화 및 분석 결과 테이블")
@@ -269,10 +275,11 @@ with gr.Blocks(title="천체사진 처리 도구 v0.17.2 (탭1 다운로드 및 
                     tab4_light_b_input, tab4_light_v_input,
                     tab4_std_star_b_file_input, tab4_std_star_v_file_input, 
                     tab4_std_b_mag_known_input, tab4_std_v_mag_known_input,
-                    tab4_uploaded_mb_obj, tab4_uploaded_md_raw_obj, 
-                    tab4_uploaded_mf_b_raw_obj, tab4_uploaded_mf_v_raw_obj,
-                    state_master_bias_path, state_master_darks_corrected_dict, 
-                    state_prelim_flats_dict, 
+                    # 마스터 프레임 관련 UI 입력 및 상태 변수 제거
+                    # tab4_uploaded_mb_obj, tab4_uploaded_md_raw_obj, 
+                    # tab4_uploaded_mf_b_raw_obj, tab4_uploaded_mf_v_raw_obj,
+                    # state_master_bias_path, state_master_darks_corrected_dict, 
+                    # state_prelim_flats_dict, 
                     tab4_kb_input, tab4_m0b_input_user, tab4_kv_input, tab4_m0v_input_user,
                     tab4_dao_fwhm_input, tab4_dao_thresh_nsigma_input, tab4_phot_ap_radius_input,
                     tab4_roi_x_min_slider, tab4_roi_x_max_slider, 
