@@ -66,9 +66,9 @@ except Exception as e:
         logger_main.error(f"최후의 수단으로 현재 작업 디렉토리를 임시 파일용으로 사용 (애플리케이션 출력용): {os.path.abspath(APP_TEMP_OUTPUT_DIR)}")
 
 
-with gr.Blocks(title="천체사진 처리 도구 v0.17.2 (탭1 다운로드 및 TypeError 수정)", theme=gr.themes.Soft()) as app: 
+with gr.Blocks(title="Quasar 통합 이미지 플랫폼)", theme=gr.themes.Soft()) as app: 
     logger_main.info("Gradio Blocks UI 정의 시작.")
-    gr.Markdown("# 천체사진 처리 도구 v0.17.2 (탭1 다운로드 및 TypeError 수정)") 
+    gr.Markdown("# Quasar 통합 이미지 플랫폼") 
     gr.Markdown("탭을 선택하여 원하는 작업을 수행하세요. 로그는 콘솔 및 각 탭의 로그 창에 출력됩니다.")
 
     # 상태 변수
@@ -83,8 +83,8 @@ with gr.Blocks(title="천체사진 처리 도구 v0.17.2 (탭1 다운로드 및 
 
     with gr.Tabs():
         # --- 탭 1 정의 (UI 출력 부분 수정) ---
-        with gr.TabItem("1. 마스터 프레임 생성 (ccdproc)"): 
-            gr.Markdown("## 마스터 프레임 (BIAS, DARK, 예비 FLAT) 생성 (ccdproc 사용)")
+        with gr.TabItem("1. 마스터 프레임 생성 "): 
+            gr.Markdown("## 마스터 프레임 (BIAS, DARK, 예비 FLAT) 생성 ")
             gr.Markdown("각 타입의 FITS 파일들을 업로드하여 마스터 보정 프레임을 생성합니다.\n"
                         "DARK는 노출시간별로, FLAT 프레임은 FITS 헤더의 'FILTER' 키워드를 읽어 필터별로 \"예비 마스터 플랫\"이 생성됩니다 (BIAS/DARK 보정 안됨).")
             with gr.Row():
@@ -92,13 +92,13 @@ with gr.Blocks(title="천체사진 처리 도구 v0.17.2 (탭1 다운로드 및 
                 tab1_dark_input = gr.File(label="DARK 프레임 업로드 (다양한 노출시간 혼합 가능)", file_count="multiple", file_types=[".fits", ".fit"], type="filepath")
                 tab1_flat_input_all = gr.File(label="FLAT 프레임 업로드 (다양한 필터 혼합 가능)", file_count="multiple", file_types=[".fits", ".fit"], type="filepath")
             
-            tab1_process_button = gr.Button("마스터 프레임 생성 시작 (ccdproc)", variant="primary") 
+            tab1_process_button = gr.Button("마스터 프레임 생성 시작 ", variant="primary") 
             
             with gr.Accordion("생성된 마스터 프레임 정보 및 로그", open=False):
                 gr.Markdown("생성된 마스터 BIAS, DARK(노출시간별), 예비 FLAT(필터별)은 내부적으로 저장되어 다른 탭에서 사용됩니다.")
-                tab1_bias_output_ui = gr.File(label="다운로드: Master BIAS", interactive=False)
-                tab1_darks_output_ui = gr.Files(label="다운로드: Master DARKs (노출시간별)", interactive=False) 
-                tab1_flats_output_ui = gr.Files(label="다운로드: 예비 Master FLATs (필터별)", interactive=False) 
+                tab1_bias_output_ui = gr.File(label="다운로드: Master BIAS", interactive=False, height=400)
+                tab1_darks_output_ui = gr.Files(label="다운로드: Master DARKs (노출시간별)", interactive=False, height=400) 
+                tab1_flats_output_ui = gr.Files(label="다운로드: 예비 Master FLATs (필터별)", interactive=False, height=400) 
                 tab1_status_output = gr.Textbox(label="처리 상태 및 요약 로그", lines=10, interactive=False, show_copy_button=True)
 
             tab1_process_button.click(
@@ -116,8 +116,8 @@ with gr.Blocks(title="천체사진 처리 도구 v0.17.2 (탭1 다운로드 및 
             )
 
         # --- 탭 2 정의 (입력 및 핸들러 호출 수정) ---
-        with gr.TabItem("2. LIGHT 프레임 보정 (ccdproc)"): 
-            gr.Markdown("## LIGHT 프레임 보정 및 미리보기 (ccdproc 사용)")
+        with gr.TabItem("2. LIGHT 프레임 보정 "): 
+            gr.Markdown("## LIGHT 프레임 보정 및 미리보기")
             gr.Markdown(
                 "LIGHT 프레임(들)을 업로드하여 보정합니다. 탭 1에서 생성된 예비 마스터 플랫은 LIGHT 프레임의 노출시간에 맞는 DARK로 실시간 보정 후 사용됩니다.\n"
                 "필요시 아래에서 마스터 BIAS, DARK(Raw, 다수 가능), 필터별 FLAT(Raw 또는 Corrected)을 직접 업로드할 수 있습니다."
